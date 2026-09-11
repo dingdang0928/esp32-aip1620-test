@@ -1,0 +1,28 @@
+---
+Language: Cpp
+BasedOnStyle: Google
+
+# 基础排版
+IndentWidth: 2
+ContinuationIndentWidth: 4
+TabWidth: 2
+UseTab: Never
+ColumnLimit: 80
+
+# 花括号与短语句
+BreakBeforeBraces: Allman
+AllowShortBlocksOnASingleLine: Never
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+
+# 保留手动组织的头文件顺序
+SortIncludes: Never
+IncludeBlocks: Preserve
+
+# 指针星号靠近变量名，例如 char *name
+DerivePointerAlignment: false
+PointerAlignment: Right
+
+InsertNewlineAtEOF: true
+...

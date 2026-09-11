@@ -1,0 +1,15 @@
+# ESP-IDF generated files
+/build/
+/managed_components/
+/sdkconfig.old
+
+# Local temporary files and caches
+/tmp/
+
+# Local editor configuration
+/.vscode/
+/.clangd
+
+# Operating system files
+.DS_Store
+Thumbs.db
