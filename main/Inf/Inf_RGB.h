@@ -8,7 +8,7 @@
 #include <math.h>
 #include <stdint.h>
 
-
 esp_err_t inf_rgb_init(void);
+esp_err_t inf_rgb_deinit(void);
 
 #endif

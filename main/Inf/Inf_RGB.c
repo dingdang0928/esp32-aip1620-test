@@ -1,5 +1,7 @@
 #include "inf_rgb.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #define RGB_GPIO 38
 #define RGB_BREATH_PERIOD_MS 2000
@@ -7,6 +9,7 @@
 #define RGB_MAX_BRIGHTNESS 100
 #define RGB_TASK_STACK_SIZE 2048
 #define RGB_TASK_PRIORITY 5
+#define RGB_TASK_STOP_NOTIFICATION (1UL << 0)
 #define PI_F 3.14159265358979323846f
 
 typedef struct
@@ -21,6 +24,10 @@ static const rgb_color_t s_colors[] = {
     {.red = 0, .green = 1, .blue = 1},
     {.red = 1, .green = 0, .blue = 1},
 };
+
+static led_strip_handle_t s_led_strip = NULL;
+static TaskHandle_t s_rgb_task_handle = NULL;
+static TaskHandle_t s_rgb_deinit_waiter = NULL;
 
 static void rgb_set_frame(led_strip_handle_t led_strip,
                           uint32_t color_index,
@@ -47,7 +54,6 @@ static void rgb_breathing_task(void *arg)
   const uint32_t steps = RGB_BREATH_PERIOD_MS / RGB_UPDATE_PERIOD_MS;
   uint32_t color_index = 0;
   uint32_t step = 0;
-  TickType_t last_wake_time = xTaskGetTickCount();
 
   while (1)
   {
@@ -61,13 +67,29 @@ static void rgb_breathing_task(void *arg)
                     (sizeof(s_colors) / sizeof(s_colors[0]));
     }
 
-    vTaskDelayUntil(&last_wake_time, pdMS_TO_TICKS(RGB_UPDATE_PERIOD_MS));
+    if (xTaskNotifyWait(0,
+                        RGB_TASK_STOP_NOTIFICATION,
+                        NULL,
+                        pdMS_TO_TICKS(RGB_UPDATE_PERIOD_MS)) == pdTRUE)
+    {
+      break;
+    }
   }
+
+  TaskHandle_t waiter = s_rgb_deinit_waiter;
+  s_rgb_task_handle = NULL;
+  s_rgb_deinit_waiter = NULL;
+
+  if (waiter != NULL)
+  {
+    xTaskNotifyGive(waiter);
+  }
+
+  vTaskDelete(NULL);
 }
 
 esp_err_t inf_rgb_init(void)
 {
-  led_strip_handle_t led_strip = NULL;
   const led_strip_config_t strip_config = {
       .strip_gpio_num = RGB_GPIO,
       .max_leds = 1,
@@ -79,24 +101,82 @@ esp_err_t inf_rgb_init(void)
       .resolution_hz = 10 * 1000 * 1000,
   };
 
+  if (s_led_strip != NULL || s_rgb_task_handle != NULL)
+  {
+    return ESP_ERR_INVALID_STATE;
+  }
+
   esp_err_t err = led_strip_new_rmt_device(&strip_config,
                                            &rmt_config,
-                                           &led_strip);
+                                           &s_led_strip);
   if (err != ESP_OK)
   {
+    s_led_strip = NULL;
     return err;
   }
 
   if (xTaskCreate(rgb_breathing_task,
                   "rgb_breath",
                   RGB_TASK_STACK_SIZE,
-                  (void *)led_strip,
+                  (void *)s_led_strip,
                   RGB_TASK_PRIORITY,
-                  NULL) != pdPASS)
+                  &s_rgb_task_handle) != pdPASS)
   {
-    led_strip_del(led_strip);
+    led_strip_del(s_led_strip);
+    s_led_strip = NULL;
+    s_rgb_task_handle = NULL;
     return ESP_ERR_NO_MEM;
   }
 
   return ESP_OK;
+}
+
+esp_err_t inf_rgb_deinit(void)
+{
+  TaskHandle_t task = s_rgb_task_handle;
+  led_strip_handle_t led_strip = s_led_strip;
+  esp_err_t err = ESP_OK;
+
+  if (task == NULL && led_strip == NULL)
+  {
+    return ESP_OK;
+  }
+
+  if (task != NULL)
+  {
+    if (task == xTaskGetCurrentTaskHandle())
+    {
+      return ESP_ERR_INVALID_STATE;
+    }
+
+    /* Clear a possible stale notification before waiting for task exit. */
+    (void)ulTaskNotifyTake(pdTRUE, 0);
+    s_rgb_deinit_waiter = xTaskGetCurrentTaskHandle();
+    (void)xTaskNotify(task,
+                      RGB_TASK_STOP_NOTIFICATION,
+                      eSetBits);
+    (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+  }
+
+  led_strip = s_led_strip;
+  if (led_strip == NULL)
+  {
+    return ESP_OK;
+  }
+
+  err = led_strip_set_pixel(led_strip, 0, 0, 0, 0);
+  if (err == ESP_OK)
+  {
+    err = led_strip_refresh(led_strip);
+  }
+
+  esp_err_t del_err = led_strip_del(led_strip);
+  s_led_strip = NULL;
+
+  if (err != ESP_OK)
+  {
+    return err;
+  }
+
+  return del_err;
 }
