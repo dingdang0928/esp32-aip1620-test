@@ -220,6 +220,8 @@ static void AIP_1620_Delay(void)
 }
 
 /** 按 AiP1620 要求,以最低位优先发送一个字节。 */
+// 采样要求:在STB是低电平的情况下,CLK是低电平,DIN输入想要的数据,拉高CLK,采样完成
+// 当采样结束的时候,需要拉高STB
 static void AIP_1620_WriteByte(uint8_t value)
 {
   for (uint8_t bit = 0; bit < 8U; ++bit)
@@ -403,8 +405,7 @@ void Inf_AIP_1620_Set_Brightness(uint8_t raw_brightness)
 }
 #endif
 
-esp_err_t Inf_AIP_1620_Set_Brightness_Level(
-    inf_aip1620_brightness_t brightness)
+esp_err_t Inf_AIP_1620_Set_Brightness_Level(inf_aip1620_brightness_t brightness)
 {
   static const uint8_t raw_brightness[INF_AIP1620_BRIGHTNESS_COUNT] = {
       0U, 1U, 2U, 3U, 7U,
@@ -454,7 +455,7 @@ void Inf_AIP_1620_Display_Number(uint16_t number, bool leading_zero)
 }
 
 esp_err_t Inf_AIP_1620_Display_Time(uint8_t hour, uint8_t minute,
-                                   bool colon_enable)
+                                    bool colon_enable)
 {
   if ((hour > 23U) || (minute > 59U))
   {
@@ -518,7 +519,7 @@ static esp_err_t AIP_1620_PowerTest_UART_Init(void)
 static void AIP_1620_PowerTest_PrintMenu(void)
 {
   MY_LOGI(" ========== AIP1620 POWER TEST ========== ");
-  MY_LOGI("0: P0 ESP32断电基线（AIP1620外部电源保持供电） ");
+  MY_LOGI("0: P0 ESP32断电基线(AIP1620外部电源保持供电) ");
   MY_LOGI("1: P1 上电但未初始化 ");
   MY_LOGI("2: P2 初始化后,RAM全0,显示开启 ");
   MY_LOGI("3: P3 全亮最高档 -> ClearAll瞬态测试 ");
@@ -528,12 +529,12 @@ static void AIP_1620_PowerTest_PrintMenu(void)
   MY_LOGI("7: P7 RAM全亮,显示关闭 ");
   MY_LOGI("8: P8 Deinit,GPIO释放 ");
   MY_LOGI("9: P9 先进入最低功耗,再手动断开ESP32供电 ");
-  MY_LOGI("10: P10 软件可控最低功耗（RAM全0、显示关闭、GPIO高阻） ");
+  MY_LOGI("10: P10 软件可控最低功耗(RAM全0、显示关闭、GPIO高阻) ");
   MY_LOGI("11: 增加一档亮度 ");
   MY_LOGI("12: 降低一档亮度 ");
   MY_LOGI("13: 开启显示 ");
-  MY_LOGI("14: 关闭显示（保留当前RAM和亮度） ");
-  MY_LOGI("15: 最下方ICON4持续闪烁（低电量提醒） ");
+  MY_LOGI("14: 关闭显示(保留当前RAM和亮度) ");
+  MY_LOGI("15: 最下方ICON4持续闪烁(低电量提醒) ");
   MY_LOGI("16: 最下方ICON4常亮 ");
   MY_LOGI("17: 全部ICON持续闪烁 ");
   MY_LOGI("18: 全部ICON常亮 ");
@@ -541,7 +542,7 @@ static void AIP_1620_PowerTest_PrintMenu(void)
   MY_LOGI("31~35: 典型页面,亮度1~5 ");
   MY_LOGI("41~45: 全亮页面,亮度1~5 ");
   MY_LOGI("51~55: 空白页面,亮度1~5 ");
-  MY_LOGI("   ICON状态下可使用11/12调节亮度 ");
+  MY_LOGI("可使用11/12调节亮度(支持ICON状态下) ");
   MY_LOGI("请输入编号并回车： ");
 }
 
@@ -622,7 +623,7 @@ static void AIP_1620_PowerTest_AdjustBrightness(bool increase)
   {
     if ((current_index + 1U) >= level_count)
     {
-      MY_LOGI("已经是最高亮度（第5档） ");
+      MY_LOGI("已经是最高亮度(第5档) ");
       return;
     }
     ++current_index;
@@ -631,7 +632,7 @@ static void AIP_1620_PowerTest_AdjustBrightness(bool increase)
   {
     if (current_index == 0U)
     {
-      MY_LOGI("已经是最低亮度（第1档） ");
+      MY_LOGI("已经是最低亮度(第1档) ");
       return;
     }
     --current_index;

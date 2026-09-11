@@ -1,11 +1,12 @@
 #include "App_ClockDisplay.h"
 
+#include "Com_Debug.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #define CLOCK_DISPLAY_TASK_STACK_SIZE 3072U
 #define CLOCK_DISPLAY_TASK_PRIORITY 4U
-#define CLOCK_DISPLAY_REFRESH_MS 500U
+#define CLOCK_DISPLAY_REFRESH_MS 1000U
 
 typedef struct
 {
@@ -41,8 +42,7 @@ static void App_ClockDisplay_Task(void *argument)
 
   bool blink_on = true;
   bool previous_enabled = false;
-  inf_aip1620_brightness_t previous_brightness =
-      INF_AIP1620_BRIGHTNESS_COUNT;
+  inf_aip1620_brightness_t previous_brightness = INF_AIP1620_BRIGHTNESS_COUNT;
   TickType_t last_wake = xTaskGetTickCount();
 
   while (true)
@@ -74,6 +74,8 @@ static void App_ClockDisplay_Task(void *argument)
       if (Inf_RTC_IsTimeValid() && (Inf_RTC_GetTime(&time) == ESP_OK))
       {
         (void)Inf_AIP_1620_Display_Time(time.hour, time.minute, true);
+        MY_LOGI("当前时间%04d-%02d-%02d %02d:%02d:%02d", time.year, time.month,
+                time.day, time.hour, time.minute, time.second);
       }
       else
       {
@@ -119,10 +121,9 @@ esp_err_t App_ClockDisplay_Init(void)
     return ret;
   }
 
-  BaseType_t result =
-      xTaskCreate(App_ClockDisplay_Task, "clock_display",
-                  CLOCK_DISPLAY_TASK_STACK_SIZE, NULL,
-                  CLOCK_DISPLAY_TASK_PRIORITY, &s_display_task);
+  BaseType_t result = xTaskCreate(App_ClockDisplay_Task, "clock_display",
+                                  CLOCK_DISPLAY_TASK_STACK_SIZE, NULL,
+                                  CLOCK_DISPLAY_TASK_PRIORITY, &s_display_task);
   if (result != pdPASS)
   {
     s_display_task = NULL;
@@ -145,8 +146,7 @@ void App_ClockDisplay_SetEnabled(bool enabled)
   portEXIT_CRITICAL(&s_state_lock);
 }
 
-esp_err_t App_ClockDisplay_SetBrightness(
-    inf_aip1620_brightness_t brightness)
+esp_err_t App_ClockDisplay_SetBrightness(inf_aip1620_brightness_t brightness)
 {
   if ((uint8_t)brightness >= INF_AIP1620_BRIGHTNESS_COUNT)
   {

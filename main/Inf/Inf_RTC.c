@@ -168,7 +168,7 @@ esp_err_t Inf_RTC_SetTime(const inf_rtc_time_t *rtc_time)
   ESP_LOGI(TAG, "RTC 设置成功：%04u-%02u-%02u %02u:%02u:%02u", rtc_time->year,
            rtc_time->month, rtc_time->day, rtc_time->hour, rtc_time->minute,
            rtc_time->second);
-
+  
   return ESP_OK;
 }
 

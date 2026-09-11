@@ -11,30 +11,35 @@ extern char tag[100];
 #if (DEBUG == 1)
 
 #define MY_LOGE(format, ...)                           \
-  do {                                                 \
+  do                                                   \
+  {                                                    \
     sprintf(tag, "[%5s:%4d]", __FILENAME__, __LINE__); \
     ESP_LOGE(tag, format, ##__VA_ARGS__);              \
   } while (0)
 #define MY_LOGW(format, ...)                           \
-  do {                                                 \
+  do                                                   \
+  {                                                    \
     sprintf(tag, "[%5s:%4d]", __FILENAME__, __LINE__); \
     ESP_LOGW(tag, format, ##__VA_ARGS__);              \
   } while (0)
 
 #define MY_LOGI(format, ...)                           \
-  do {                                                 \
+  do                                                   \
+  {                                                    \
     sprintf(tag, "[%5s:%4d]", __FILENAME__, __LINE__); \
     ESP_LOGI(tag, format, ##__VA_ARGS__);              \
   } while (0)
 
 #define MY_LOGD(format, ...)                           \
-  do {                                                 \
+  do                                                   \
+  {                                                    \
     sprintf(tag, "[%5s:%4d]", __FILENAME__, __LINE__); \
     ESP_LOGD(tag, format, ##__VA_ARGS__);              \
   } while (0)
 
 #define MY_LOGV(format, ...)                           \
-  do {                                                 \
+  do                                                   \
+  {                                                    \
     sprintf(tag, "[%5s:%4d]", __FILENAME__, __LINE__); \
     ESP_LOGV(tag, format, ##__VA_ARGS__);              \
   } while (0)
