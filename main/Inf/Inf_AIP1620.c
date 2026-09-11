@@ -1,17 +1,23 @@
 #include "Inf_AIP1620.h"
 
 #include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "Common/Com_Debug.h"
 #include "driver/gpio.h"
+#include "esp_rom_sys.h"
+#include "sdkconfig.h"
+
+#ifdef CONFIG_AIP1620_POWER_TEST
+#include "Inf_AIP1620_Test.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+
 #include "driver/uart.h"
 #include "driver/uart_vfs.h"
-#include "esp_rom_sys.h"
 #include "freertos/task.h"
-#include "sdkconfig.h"
+#endif
 
 /* 硬件引脚：CLK=36,DIN=39,STB=40；灯板由外部电源供电。 */
 #define AIP1620_CLK_GPIO GPIO_NUM_36
@@ -28,7 +34,10 @@
 
 #define AIP1620_GRID_COUNT 6U
 #define AIP1620_DEFAULT_BRIGHTNESS 0U
+#define AIP1620_RAW_BRIGHTNESS_MAX 8U
 #define AIP1620_HALF_CLOCK_US 1U
+
+#ifdef CONFIG_AIP1620_POWER_TEST
 #define AIP1620_POWER_TEST_TASK_STACK_SIZE 9182U
 #define AIP1620_POWER_TEST_TASK_PRIORITY 5U
 #define AIP1620_POWER_TEST_UART_RX_BUFFER_SIZE 512U
@@ -39,6 +48,7 @@
 #define AIP1620_LOW_BATTERY_EVENT_STOP (1UL << 0)
 #define AIP1620_LOW_BATTERY_EVENT_BRIGHTNESS_UP (1UL << 1)
 #define AIP1620_LOW_BATTERY_EVENT_BRIGHTNESS_DOWN (1UL << 2)
+#endif
 
 /* AiP1620 显示 RAM 的 bit0~bit7 分别对应 SEG1~SEG8。 */
 #define AIP1620_SEG1 (1U << 0)
@@ -57,7 +67,6 @@
 #define AIP1620_ICON_SEGMENTS \
   (AIP1620_SEG1 | AIP1620_SEG2 | AIP1620_SEG3 | AIP1620_SEG4)
 
-volatile uint8_t RTC_FLAG = 0;
 typedef enum
 {
   AIP1620_GRID_DIGIT_1 = 0,
@@ -68,6 +77,7 @@ typedef enum
   AIP1620_GRID_ICONS,
 } aip1620_grid_t;
 
+#ifdef CONFIG_AIP1620_POWER_TEST
 // 客户需求：亮度使用五个档位 0、1、2、3、7。
 typedef enum
 {
@@ -101,6 +111,7 @@ typedef enum
   AIP1620_POWER_TEST_CMD_ALL_ICONS_BLINK = 17,
   AIP1620_POWER_TEST_CMD_ALL_ICONS_STEADY = 18,
 } aip1620_power_test_command_t;
+#endif
 
 /* 灯板实际段位：SEG1~SEG7 = a、f、b、g、e、c、d。 */
 static const uint8_t s_digit_segments[10] = {
@@ -124,10 +135,13 @@ static uint8_t s_grid_data[AIP1620_GRID_COUNT];
 static uint8_t s_brightness = AIP1620_DEFAULT_BRIGHTNESS;
 static bool s_display_enabled;
 static bool s_initialized;
+
+#ifdef CONFIG_AIP1620_POWER_TEST
 static TaskHandle_t s_power_test_task_handle;
 static TaskHandle_t s_icon_state_task_handle;
 static TaskHandle_t s_icon_state_stop_waiter;
 static volatile aip1620_icon_state_t s_icon_state = AIP1620_ICON_STATE_IDLE;
+#endif
 
 static void AIP_1620_SetGridSegments(aip1620_grid_t grid, uint8_t segments)
 {
@@ -314,10 +328,12 @@ esp_err_t Inf_AIP_1620_Init(void)
 
 esp_err_t Inf_AIP_1620_Deinit(void)
 {
+#ifdef CONFIG_AIP1620_POWER_TEST
   if (s_icon_state != AIP1620_ICON_STATE_IDLE)
   {
     Inf_AIP_1620_Low_Battery_Warning_Disable();
   }
+#endif
 
   if (!s_initialized)
   {
@@ -350,11 +366,13 @@ void Inf_AIP_1620_ClearAll(void)
   AIP_1620_UpdateRam();
 }
 
+#ifdef CONFIG_AIP1620_POWER_TEST
 void Inf_AIP_1620_Display_All(void)
 {
   memcpy(s_grid_data, s_grid_segment_masks, sizeof(s_grid_data));
   AIP_1620_UpdateRam();
 }
+#endif
 
 void Inf_AIP_1620_Display_Enable(void)
 {
@@ -368,16 +386,40 @@ void Inf_AIP_1620_Display_Disable(void)
   AIP_1620_UpdateDisplayControl();
 }
 
-void Inf_AIP_1620_Set_Brightness(uint8_t brightness)
+static void AIP_1620_SetRawBrightness(uint8_t brightness)
 {
-  if (brightness >= INF_AIP1620_BRIGHTNESS_MAX)
+  if (brightness >= AIP1620_RAW_BRIGHTNESS_MAX)
   {
-    brightness = INF_AIP1620_BRIGHTNESS_MAX - 1U;
+    brightness = AIP1620_RAW_BRIGHTNESS_MAX - 1U;
   }
   s_brightness = brightness;
   AIP_1620_UpdateDisplayControl();
 }
 
+#ifdef CONFIG_AIP1620_POWER_TEST
+void Inf_AIP_1620_Set_Brightness(uint8_t raw_brightness)
+{
+  AIP_1620_SetRawBrightness(raw_brightness);
+}
+#endif
+
+esp_err_t Inf_AIP_1620_Set_Brightness_Level(
+    inf_aip1620_brightness_t brightness)
+{
+  static const uint8_t raw_brightness[INF_AIP1620_BRIGHTNESS_COUNT] = {
+      0U, 1U, 2U, 3U, 7U,
+  };
+
+  if ((uint8_t)brightness >= INF_AIP1620_BRIGHTNESS_COUNT)
+  {
+    return ESP_ERR_INVALID_ARG;
+  }
+
+  AIP_1620_SetRawBrightness(raw_brightness[brightness]);
+  return ESP_OK;
+}
+
+#ifdef CONFIG_AIP1620_POWER_TEST
 void Inf_AIP_1620_Display_Digit(uint8_t position, uint8_t digit)
 {
   if ((position >= INF_AIP1620_DIGIT_COUNT) || (digit > 9U))
@@ -388,6 +430,7 @@ void Inf_AIP_1620_Display_Digit(uint8_t position, uint8_t digit)
   AIP_1620_SetGridSegments(s_digit_grids[position], s_digit_segments[digit]);
   AIP_1620_UpdateRam();
 }
+#endif
 
 void Inf_AIP_1620_Display_Number(uint16_t number, bool leading_zero)
 {
@@ -410,6 +453,24 @@ void Inf_AIP_1620_Display_Number(uint16_t number, bool leading_zero)
   AIP_1620_UpdateRam();
 }
 
+esp_err_t Inf_AIP_1620_Display_Time(uint8_t hour, uint8_t minute,
+                                   bool colon_enable)
+{
+  if ((hour > 23U) || (minute > 59U))
+  {
+    return ESP_ERR_INVALID_ARG;
+  }
+
+  AIP_1620_SetGridSegments(s_digit_grids[0], s_digit_segments[hour / 10U]);
+  AIP_1620_SetGridSegments(s_digit_grids[1], s_digit_segments[hour % 10U]);
+  AIP_1620_SetGridSegments(s_digit_grids[2], s_digit_segments[minute / 10U]);
+  AIP_1620_SetGridSegments(s_digit_grids[3], s_digit_segments[minute % 10U]);
+  AIP_1620_SetGridSegments(AIP1620_GRID_COLON,
+                           colon_enable ? AIP1620_COLON_SEGMENTS : 0x00U);
+  AIP_1620_UpdateRam();
+  return ESP_OK;
+}
+
 void Inf_AIP_1620_Display_Mid_Dot(bool enable)
 {
   AIP_1620_SetGridSegments(AIP1620_GRID_COLON,
@@ -429,6 +490,7 @@ void Inf_AIP_1620_Display_Icons(uint8_t icon_mask)
   AIP_1620_UpdateGrid(AIP1620_GRID_ICONS);
 }
 
+#ifdef CONFIG_AIP1620_POWER_TEST
 static const aip_1620_BrightnessLevel_t s_power_test_brightness[] = {
     BRIGHTNESS_LEVEL_1, BRIGHTNESS_LEVEL_2, BRIGHTNESS_LEVEL_3,
     BRIGHTNESS_LEVEL_4, BRIGHTNESS_LEVEL_5,
@@ -475,8 +537,7 @@ static void AIP_1620_PowerTest_PrintMenu(void)
   MY_LOGI("16: 最下方ICON4常亮 ");
   MY_LOGI("17: 全部ICON持续闪烁 ");
   MY_LOGI("18: 全部ICON常亮 ");
-  MY_LOGI("19: 实时时钟亮灭切换 ");
-  MY_LOGI("20~30: 预留 ");
+  MY_LOGI("19~30: 预留 ");
   MY_LOGI("31~35: 典型页面,亮度1~5 ");
   MY_LOGI("41~45: 全亮页面,亮度1~5 ");
   MY_LOGI("51~55: 空白页面,亮度1~5 ");
@@ -601,7 +662,7 @@ static void AIP_1620_PowerTest_SetTypicalPage(uint8_t brightness)
 {
   Inf_AIP_1620_Display_Number(1234U, true);
   Inf_AIP_1620_Display_Mid_Dot(true);
-  Inf_AIP_1620_Display_Icons(INF_AIP1620_ICON_ALL_MASK);
+  Inf_AIP_1620_Display_Icons(INF_AIP1620_ICON_ALL);
   Inf_AIP_1620_Set_Brightness(brightness);
   Inf_AIP_1620_Display_Enable();
 }
@@ -631,7 +692,7 @@ static void AIP_1620_IconStateTask(void *argument)
     switch (s_icon_state)
     {
       case AIP1620_ICON_STATE_ICON4_BLINK_ON:
-        Inf_AIP_1620_Display_Icons(INF_AIP1620_ICON_4_MASK);
+        Inf_AIP_1620_Display_Icons(INF_AIP1620_ICON_4);
         s_icon_state = AIP1620_ICON_STATE_ICON4_BLINK_OFF;
         wait_ticks = pdMS_TO_TICKS(AIP1620_POWER_TEST_ICON_BLINK_INTERVAL_MS);
         break;
@@ -643,11 +704,11 @@ static void AIP_1620_IconStateTask(void *argument)
         break;
 
       case AIP1620_ICON_STATE_ICON4_STEADY:
-        Inf_AIP_1620_Display_Icons(INF_AIP1620_ICON_4_MASK);
+        Inf_AIP_1620_Display_Icons(INF_AIP1620_ICON_4);
         break;
 
       case AIP1620_ICON_STATE_ALL_BLINK_ON:
-        Inf_AIP_1620_Display_Icons(INF_AIP1620_ICON_ALL_MASK);
+        Inf_AIP_1620_Display_Icons(INF_AIP1620_ICON_ALL);
         s_icon_state = AIP1620_ICON_STATE_ALL_BLINK_OFF;
         wait_ticks = pdMS_TO_TICKS(AIP1620_POWER_TEST_ICON_BLINK_INTERVAL_MS);
         break;
@@ -659,7 +720,7 @@ static void AIP_1620_IconStateTask(void *argument)
         break;
 
       case AIP1620_ICON_STATE_ALL_STEADY:
-        Inf_AIP_1620_Display_Icons(INF_AIP1620_ICON_ALL_MASK);
+        Inf_AIP_1620_Display_Icons(INF_AIP1620_ICON_ALL);
         break;
 
       default:
@@ -1092,10 +1153,6 @@ static void AIP_1620_PowerTest_Task(void *argument)
               "请等待电流稳定后记录AIP1620回路的V/I/P。 ");
         }
         break;
-      case 19:
-        RTC_FLAG = !RTC_FLAG;
-        MY_LOGI("实时时钟显示切换");
-        break;
       default:
         if ((command >= 31) && (command <= 35))
         {
@@ -1177,3 +1234,4 @@ esp_err_t Inf_AIP_1620_Power_Test(void)
                   AIP1620_POWER_TEST_TASK_PRIORITY, &s_power_test_task_handle);
   return (result == pdPASS) ? ESP_OK : ESP_ERR_NO_MEM;
 }
+#endif /* CONFIG_AIP1620_POWER_TEST */
