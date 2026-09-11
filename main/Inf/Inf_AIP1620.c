@@ -1,5 +1,6 @@
 #include "Inf_AIP1620.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,7 +10,6 @@
 #include "driver/uart.h"
 #include "driver/uart_vfs.h"
 #include "esp_rom_sys.h"
-#include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "sdkconfig.h"
 
@@ -57,6 +57,7 @@
 #define AIP1620_ICON_SEGMENTS \
   (AIP1620_SEG1 | AIP1620_SEG2 | AIP1620_SEG3 | AIP1620_SEG4)
 
+volatile uint8_t RTC_FLAG = 0;
 typedef enum
 {
   AIP1620_GRID_DIGIT_1 = 0,
@@ -342,6 +343,7 @@ esp_err_t Inf_AIP_1620_Deinit(void)
   return ESP_OK;
 }
 
+//
 void Inf_AIP_1620_ClearAll(void)
 {
   memset(s_grid_data, 0, sizeof(s_grid_data));
@@ -473,7 +475,8 @@ static void AIP_1620_PowerTest_PrintMenu(void)
   MY_LOGI("16: 最下方ICON4常亮 ");
   MY_LOGI("17: 全部ICON持续闪烁 ");
   MY_LOGI("18: 全部ICON常亮 ");
-  MY_LOGI("19~30: 预留 ");
+  MY_LOGI("19: 实时时钟亮灭切换 ");
+  MY_LOGI("20~30: 预留 ");
   MY_LOGI("31~35: 典型页面,亮度1~5 ");
   MY_LOGI("41~45: 全亮页面,亮度1~5 ");
   MY_LOGI("51~55: 空白页面,亮度1~5 ");
@@ -1089,7 +1092,10 @@ static void AIP_1620_PowerTest_Task(void *argument)
               "请等待电流稳定后记录AIP1620回路的V/I/P。 ");
         }
         break;
-
+      case 19:
+        RTC_FLAG = !RTC_FLAG;
+        MY_LOGI("实时时钟显示切换");
+        break;
       default:
         if ((command >= 31) && (command <= 35))
         {

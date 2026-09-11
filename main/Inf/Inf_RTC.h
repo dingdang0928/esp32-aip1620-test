@@ -1,73 +1,82 @@
-#ifndef __INF_RTC_H__
-#define __INF_RTC_H__
+#ifndef INF_RTC_H
+#define INF_RTC_H
 
-#include <stdbool.h>
 #include <stdint.h>
-
 #include "esp_err.h"
+#include <stdbool.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-/**
- * @brief RTC 时间结构体
- */
-typedef struct
-{
-    uint16_t year;   /**< 年：2020~2099 */
-    uint8_t month;   /**< 月：1~12 */
-    uint8_t day;     /**< 日：1~31 */
+  /**
+   * @brief RTC 时间结构体
+   */
+  typedef struct
+  {
+    uint16_t year;   /**< 年，例如 2026 */
+    uint8_t month;   /**< 月，1~12 */
+    uint8_t day;     /**< 日，1~31 */
+    uint8_t hour;    /**< 时，0~23 */
+    uint8_t minute;  /**< 分，0~59 */
+    uint8_t second;  /**< 秒，0~59 */
+    uint8_t weekday; /**< 星期，0=星期日，1=星期一 ... 6=星期六 */
+  } inf_rtc_time_t;
 
-    uint8_t hour;    /**< 时：0~23 */
-    uint8_t minute;  /**< 分：0~59 */
-    uint8_t second;  /**< 秒：0~59 */
+  /**
+   * @brief 初始化内部 RTC
+   *
+   * 默认设置为中国标准时间 UTC+8。
+   *
+   * @return ESP_OK 成功
+   */
+  esp_err_t Inf_RTC_Init(void);
 
-    uint8_t week;    /**< 星期：0=星期日，1=星期一 ... 6=星期六 */
-} inf_rtc_time_t;
+  /**
+   * @brief 设置 RTC 时间
+   *
+   * @param rtc_time 要设置的时间
+   *
+   * @return
+   *      - ESP_OK 成功
+   *      - ESP_ERR_INVALID_ARG 参数错误
+   */
+  esp_err_t Inf_RTC_SetTime(const inf_rtc_time_t *rtc_time);
 
-/**
- * @brief 初始化 RTC
- *
- * @return ESP_OK 成功
- * @return ESP_FAIL 失败
- */
-esp_err_t Inf_RTC_Init(void);
+  /**
+   * @brief 获取当前 RTC 时间
+   *
+   * @param rtc_time 用于保存当前时间
+   *
+   * @return
+   *      - ESP_OK 成功
+   *      - ESP_ERR_INVALID_ARG 参数错误
+   */
+  esp_err_t Inf_RTC_GetTime(inf_rtc_time_t *rtc_time);
 
-/**
- * @brief 设置 RTC 时间
- *
- * @param rtc_time RTC 时间
- *
- * @return ESP_OK 成功
- * @return ESP_ERR_INVALID_ARG 参数错误
- * @return ESP_FAIL 设置失败
- */
-esp_err_t Inf_RTC_SetTime(const inf_rtc_time_t *rtc_time);
+  /**
+   * @brief 获取 Unix 时间戳
+   *
+   * @return 当前 Unix 时间戳，单位秒
+   */
+  int64_t Inf_RTC_GetTimestamp(void);
 
-/**
- * @brief 获取 RTC 时间
- *
- * @param rtc_time 用于保存当前 RTC 时间
- *
- * @return ESP_OK 成功
- * @return ESP_ERR_INVALID_ARG 参数错误
- * @return ESP_FAIL 获取失败
- */
-esp_err_t Inf_RTC_GetTime(inf_rtc_time_t *rtc_time);
+  /**
+   * @brief 判断当前 RTC 时间是否有效
+   *
+   * @return true 有效
+   * @return false 无效
+   */
+  bool Inf_RTC_IsTimeValid(void);
 
-/**
- * @brief 检查 RTC 时间是否合法
- *
- * @param rtc_time RTC 时间
- *
- * @return true 合法
- * @return false 非法
- */
-bool Inf_RTC_IsTimeValid(const inf_rtc_time_t *rtc_time);
+  /**
+   * @brief 打印当前 RTC 时间
+   */
+  void Inf_RTC_PrintTime(void);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* __INF_RTC_H__ */
+#endif /* INF_RTC_H */

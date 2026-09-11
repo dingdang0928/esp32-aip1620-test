@@ -7,6 +7,7 @@
 #include "esp_err.h"
 
 /** 亮度范围为 0~7。 */
+// 客户要求5档亮度
 #define INF_AIP1620_BRIGHTNESS_MAX 8U
 
 /** 数码管共有 4 个数字位，位置从左到右为 0~3。 */
@@ -27,7 +28,7 @@ esp_err_t Inf_AIP_1620_Deinit(void);
 esp_err_t Inf_AIP_1620_Power_Test(void);
 
 /** 清空所有数字、冒号和图标。 */
-// RAM清空
+// RAM清空,不关显示
 void Inf_AIP_1620_ClearAll(void);
 
 /** 点亮灯板上的所有灯，用于测试。 */
