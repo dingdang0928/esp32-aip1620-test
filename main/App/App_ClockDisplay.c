@@ -1,103 +1,64 @@
 #include "App_ClockDisplay.h"
 
-#include "Com_Debug.h"
+#include "Common/Com_Debug.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/task.h"
 
-#define CLOCK_DISPLAY_TASK_STACK_SIZE 3072U
-#define CLOCK_DISPLAY_TASK_PRIORITY 4U
-#define CLOCK_DISPLAY_REFRESH_MS 1000U
+#define CLOCK_TASK_STACK_SIZE 3072U
+#define CLOCK_TASK_PRIORITY 4U
+#define CLOCK_REFRESH_MS 1000U
+#define CLOCK_LOW_BATTERY_BLINK_MS 500U
 
 typedef struct
 {
-  bool enabled;
-  bool low_battery;
-  uint8_t icon_mask;
-  inf_aip1620_brightness_t brightness;
-} app_clock_display_state_t;
+  QueueHandle_t response_queue;
+} clock_command_t;
 
-static app_clock_display_state_t s_state = {
-    .enabled = true,
-    .low_battery = false,
-    .icon_mask = INF_AIP1620_ICON_NONE,
-    .brightness = INF_AIP1620_BRIGHTNESS_3,
-};
-static portMUX_TYPE s_state_lock = portMUX_INITIALIZER_UNLOCKED;
-static TaskHandle_t s_display_task;
+static QueueHandle_t s_clock_queue;
+static TaskHandle_t s_clock_task;
 
-static app_clock_display_state_t App_ClockDisplay_GetState(void)
+static void App_ClockDisplay_Refresh(void)
 {
-  app_clock_display_state_t state;
+  inf_rtc_time_t time = {0};
+  if (!Inf_RTC_IsTimeValid() || (Inf_RTC_GetTime(&time) != ESP_OK))
+  {
+    (void)App_DisplayAIP1620_ShowTime(0U, 0U, true);
+    return;
+  }
 
-  portENTER_CRITICAL(&s_state_lock);
-  state = s_state;
-  portEXIT_CRITICAL(&s_state_lock);
-
-  return state;
+  esp_err_t ret = App_DisplayAIP1620_ShowTime(time.hour, time.minute, true);
+  if (ret != ESP_OK)
+  {
+    MY_LOGE("时钟显示消息发送失败：%s", esp_err_to_name(ret));
+  }
 }
 
 static void App_ClockDisplay_Task(void *argument)
 {
   (void)argument;
 
-  bool blink_on = true;
-  bool previous_enabled = false;
-  inf_aip1620_brightness_t previous_brightness = INF_AIP1620_BRIGHTNESS_COUNT;
-  TickType_t last_wake = xTaskGetTickCount();
-
+  clock_command_t command;
   while (true)
   {
-    app_clock_display_state_t state = App_ClockDisplay_GetState();
-
-    if (state.enabled != previous_enabled)
+    App_ClockDisplay_Refresh();
+    if (xQueueReceive(s_clock_queue, &command,
+                      pdMS_TO_TICKS(CLOCK_REFRESH_MS)) == pdPASS)
     {
-      if (state.enabled)
+      const esp_err_t result = ESP_OK;
+      s_clock_task = NULL;
+      if (command.response_queue != NULL)
       {
-        Inf_AIP_1620_Display_Enable();
+        (void)xQueueSend(command.response_queue, &result, portMAX_DELAY);
       }
-      else
-      {
-        Inf_AIP_1620_Display_Disable();
-      }
-      previous_enabled = state.enabled;
+      vTaskDelete(NULL);
     }
-
-    if (state.brightness != previous_brightness)
-    {
-      (void)Inf_AIP_1620_Set_Brightness_Level(state.brightness);
-      previous_brightness = state.brightness;
-    }
-
-    if (state.enabled)
-    {
-      inf_rtc_time_t time = {0};
-      if (Inf_RTC_IsTimeValid() && (Inf_RTC_GetTime(&time) == ESP_OK))
-      {
-        (void)Inf_AIP_1620_Display_Time(time.hour, time.minute, true);
-        MY_LOGI("当前时间%04d-%02d-%02d %02d:%02d:%02d", time.year, time.month,
-                time.day, time.hour, time.minute, time.second);
-      }
-      else
-      {
-        (void)Inf_AIP_1620_Display_Time(0U, 0U, true);
-      }
-
-      uint8_t icons = state.icon_mask & INF_AIP1620_ICON_ALL;
-      if (state.low_battery && blink_on)
-      {
-        icons |= INF_AIP1620_ICON_4;
-      }
-      Inf_AIP_1620_Display_Icons(icons);
-    }
-
-    blink_on = !blink_on;
-    vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(CLOCK_DISPLAY_REFRESH_MS));
   }
 }
 
 esp_err_t App_ClockDisplay_Init(void)
 {
-  if (s_display_task != NULL)
+  if ((s_clock_queue != NULL) || (s_clock_task != NULL))
   {
     return ESP_ERR_INVALID_STATE;
   }
@@ -107,68 +68,114 @@ esp_err_t App_ClockDisplay_Init(void)
   {
     return ret;
   }
-
-  ret = Inf_AIP_1620_Init();
+  ret = App_DisplayAIP1620_Init();
   if (ret != ESP_OK)
   {
     return ret;
   }
 
-  ret = Inf_AIP_1620_Set_Brightness_Level(s_state.brightness);
-  if (ret != ESP_OK)
+  s_clock_queue = xQueueCreate(1U, sizeof(clock_command_t));
+  if (s_clock_queue == NULL)
   {
-    (void)Inf_AIP_1620_Deinit();
-    return ret;
-  }
-
-  BaseType_t result = xTaskCreate(App_ClockDisplay_Task, "clock_display",
-                                  CLOCK_DISPLAY_TASK_STACK_SIZE, NULL,
-                                  CLOCK_DISPLAY_TASK_PRIORITY, &s_display_task);
-  if (result != pdPASS)
-  {
-    s_display_task = NULL;
-    (void)Inf_AIP_1620_Deinit();
+    (void)App_DisplayAIP1620_Deinit();
     return ESP_ERR_NO_MEM;
   }
 
+  BaseType_t result =
+      xTaskCreate(App_ClockDisplay_Task, "clock_display", CLOCK_TASK_STACK_SIZE,
+                  NULL, CLOCK_TASK_PRIORITY, &s_clock_task);
+  if (result != pdPASS)
+  {
+    vQueueDelete(s_clock_queue);
+    s_clock_queue = NULL;
+    (void)App_DisplayAIP1620_Deinit();
+    return ESP_ERR_NO_MEM;
+  }
   return ESP_OK;
+}
+
+esp_err_t App_ClockDisplay_Deinit(void)
+{
+  if ((s_clock_queue == NULL) || (s_clock_task == NULL))
+  {
+    return App_DisplayAIP1620_Deinit();
+  }
+  if (s_clock_task == xTaskGetCurrentTaskHandle())
+  {
+    return ESP_ERR_INVALID_STATE;
+  }
+
+  QueueHandle_t response_queue = xQueueCreate(1U, sizeof(esp_err_t));
+  if (response_queue == NULL)
+  {
+    return ESP_ERR_NO_MEM;
+  }
+  const clock_command_t command = {
+      .response_queue = response_queue,
+  };
+  if (xQueueSend(s_clock_queue, &command, pdMS_TO_TICKS(50U)) != pdPASS)
+  {
+    vQueueDelete(response_queue);
+    return ESP_ERR_TIMEOUT;
+  }
+
+  esp_err_t result = ESP_FAIL;
+  (void)xQueueReceive(response_queue, &result, portMAX_DELAY);
+  vQueueDelete(response_queue);
+  vQueueDelete(s_clock_queue);
+  s_clock_queue = NULL;
+  if (result != ESP_OK)
+  {
+    return result;
+  }
+  return App_DisplayAIP1620_Deinit();
 }
 
 esp_err_t App_ClockDisplay_SetTime(const inf_rtc_time_t *time)
 {
-  return Inf_RTC_SetTime(time);
-}
-
-void App_ClockDisplay_SetEnabled(bool enabled)
-{
-  portENTER_CRITICAL(&s_state_lock);
-  s_state.enabled = enabled;
-  portEXIT_CRITICAL(&s_state_lock);
-}
-
-esp_err_t App_ClockDisplay_SetBrightness(inf_aip1620_brightness_t brightness)
-{
-  if ((uint8_t)brightness >= INF_AIP1620_BRIGHTNESS_COUNT)
+  esp_err_t ret = Inf_RTC_SetTime(time);
+  if (ret == ESP_OK)
   {
-    return ESP_ERR_INVALID_ARG;
+    ret = App_DisplayAIP1620_ShowTime(time->hour, time->minute, true);
   }
-
-  portENTER_CRITICAL(&s_state_lock);
-  s_state.brightness = brightness;
-  portEXIT_CRITICAL(&s_state_lock);
-  return ESP_OK;
+  return ret;
 }
 
-void App_ClockDisplay_SetIcons(uint8_t icon_mask)
+esp_err_t App_ClockDisplay_SetEnabled(bool enabled)
 {
-  portENTER_CRITICAL(&s_state_lock);
-  s_state.icon_mask = icon_mask & INF_AIP1620_ICON_ALL;
-  portEXIT_CRITICAL(&s_state_lock);
+  return App_DisplayAIP1620_SetEnabled(enabled);
 }
 
-void App_ClockDisplay_SetLowBattery(bool low_battery)
+esp_err_t App_ClockDisplay_SetBrightness(
+    app_display_aip1620_brightness_t brightness)
 {
-  portENTER_CRITICAL(&s_state_lock);
-  s_state.low_battery = low_battery;
-  portEXIT_CRITICAL(&s_state_lock);
+  return App_DisplayAIP1620_SetBrightness(brightness);
+}
+
+esp_err_t App_ClockDisplay_SetIcons(uint8_t icon_mask)
+{
+  return App_DisplayAIP1620_SetIcons(icon_mask);
+}
+
+esp_err_t App_ClockDisplay_SetLowBattery(bool low_battery)
+{
+  esp_err_t ret;
+  if (low_battery)
+  {
+    ret = App_DisplayAIP1620_SetIcon(APP_DISPLAY_AIP1620_ICON_4, true);
+    if (ret == ESP_OK)
+    {
+      ret = App_DisplayAIP1620_StartBlink(APP_DISPLAY_AIP1620_BLINK_ICON_4,
+                                          CLOCK_LOW_BATTERY_BLINK_MS);
+    }
+  }
+  else
+  {
+    ret = App_DisplayAIP1620_StopBlink();
+    if (ret == ESP_OK)
+    {
+      ret = App_DisplayAIP1620_SetIcon(APP_DISPLAY_AIP1620_ICON_4, false);
+    }
+  }
+  return ret;
 }

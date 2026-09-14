@@ -1,35 +1,48 @@
-| Supported Targets | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C5 | ESP32-C6 | ESP32-H2 | ESP32-P4 | ESP32-S2 | ESP32-S3 |
-| ----------------- | ----- | -------- | -------- | -------- | -------- | -------- | -------- | -------- | -------- |
+# project-name
 
-# _Sample project_
+ESP32-S3 firmware based on ESP-IDF.
 
-(See the README.md file in the upper level 'examples' directory for more information about examples.)
+## AiP1620 architecture
 
-This is the simplest buildable example. The example is used by command `idf.py create-project`
-that copies the project to user specified path and set it's name. For more information follow the [docs page](https://docs.espressif.com/projects/esp-idf/en/latest/api-guides/build-system.html#start-a-new-project)
+AiP1620 follows a strict two-layer design:
 
+- `main/Inf/Inf_AIP1620.*` is a synchronous hardware driver. It only handles
+  GPIO timing, frame encoding, brightness and display power state. It never
+  creates a FreeRTOS task or queue.
+- `main/App/APP_DisplayAIP1620.*` owns the display task and command queue. All
+  runtime display operations are serialized through this queue, including
+  blinking.
+- `main/App/App_ClockDisplay.*` periodically reads the RTC and sends time
+  updates to the display service.
+- `main/App/App_AIP1620PowerTest.*` contains the optional UART power-test task.
+  It is enabled with `CONFIG_AIP1620_POWER_TEST` and must not run together with
+  the normal clock-display application.
 
+Application code should include `APP_DisplayAIP1620.h` or
+`App_ClockDisplay.h`; it should not call `Inf_AIP1620` directly. Display APIs
+return the result of validating and enqueueing a command. Hardware execution
+then occurs asynchronously in the display task.
 
-## How to use example
-We encourage the users to use the example as a template for the new projects.
-A recommended way is to follow the instructions on a [docs page](https://docs.espressif.com/projects/esp-idf/en/latest/api-guides/build-system.html#start-a-new-project).
+Typical clock startup:
 
-## Example folder contents
-
-The project **sample_project** contains one source file in C language [main.c](main/main.c). The file is located in folder [main](main).
-
-ESP-IDF projects are built using CMake. The project build configuration is contained in `CMakeLists.txt`
-files that provide set of directives and instructions describing the project's source files and targets
-(executable, library, or both). 
-
-Below is short explanation of remaining files in the project folder.
-
+```c
+ESP_ERROR_CHECK(App_ClockDisplay_Init());
+ESP_ERROR_CHECK(App_ClockDisplay_SetBrightness(
+    APP_DISPLAY_AIP1620_BRIGHTNESS_3));
 ```
-├── CMakeLists.txt
-├── main
-│   ├── CMakeLists.txt
-│   └── main.c
-└── README.md                  This is the file you are currently reading
+
+Direct application display usage:
+
+```c
+ESP_ERROR_CHECK(App_DisplayAIP1620_Init());
+ESP_ERROR_CHECK(App_DisplayAIP1620_ShowTime(12U, 34U, true));
+ESP_ERROR_CHECK(App_DisplayAIP1620_SetIcons(
+    APP_DISPLAY_AIP1620_ICON_1 | APP_DISPLAY_AIP1620_ICON_3));
 ```
-Additionally, the sample project contains Makefile and component.mk files, used for the legacy Make based build system. 
-They are not used or needed when building with CMake and idf.py.
+
+## Build
+
+```text
+idf.py set-target esp32s3
+idf.py build
+```

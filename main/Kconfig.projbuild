@@ -4,7 +4,7 @@ config AIP1620_POWER_TEST
     bool "Enable AiP1620 power-test console"
     default n
     help
-        Compile the UART power-test menu and test-only display helpers.
+        Compile the application-layer UART power-test task.
         Keep this disabled in production firmware.
 
 endmenu
