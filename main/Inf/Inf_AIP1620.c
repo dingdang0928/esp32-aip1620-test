@@ -439,7 +439,7 @@ esp_err_t Inf_AIP_1620_Deinit(void)
   return ESP_OK;
 }
 
-//清空RAM,不更改显示开关
+// 清空RAM,不更改显示开关
 void Inf_AIP_1620_ClearAll(void)
 {
   if (!AIP_1620_Lock())
@@ -667,10 +667,8 @@ static void AIP_1620_BlinkTask(void *argument)
     }
 
     uint32_t events = 0U;
-    BaseType_t notified =
-        xTaskNotifyWait(0U, UINT32_MAX, &events, wait_ticks);
-    if ((notified == pdTRUE) &&
-        ((events & AIP1620_BLINK_EVENT_STOP) != 0U))
+    BaseType_t notified = xTaskNotifyWait(0U, UINT32_MAX, &events, wait_ticks);
+    if ((notified == pdTRUE) && ((events & AIP1620_BLINK_EVENT_STOP) != 0U))
     {
       break;
     }
@@ -680,8 +678,7 @@ static void AIP_1620_BlinkTask(void *argument)
       break;
     }
 
-    if ((notified == pdTRUE) &&
-        ((events & AIP1620_BLINK_EVENT_UPDATE) != 0U))
+    if ((notified == pdTRUE) && ((events & AIP1620_BLINK_EVENT_UPDATE) != 0U))
     {
       s_blink_visible = true;
     }
@@ -721,8 +718,7 @@ static void AIP_1620_BlinkTask(void *argument)
   vTaskDelete(NULL);
 }
 
-esp_err_t Inf_AIP_1620_Blink_Start(uint16_t content_mask,
-                                    uint32_t interval_ms)
+esp_err_t Inf_AIP_1620_Blink_Start(uint16_t content_mask, uint32_t interval_ms)
 {
   if ((content_mask == INF_AIP1620_BLINK_NONE) ||
       ((content_mask & (uint16_t)~INF_AIP1620_BLINK_ALL) != 0U) ||
@@ -756,10 +752,9 @@ esp_err_t Inf_AIP_1620_Blink_Start(uint16_t content_mask,
                : ESP_FAIL;
   }
 
-  BaseType_t result =
-      xTaskCreate(AIP_1620_BlinkTask, "aip1620_blink",
-                  AIP1620_BLINK_TASK_STACK_SIZE, NULL,
-                  AIP1620_BLINK_TASK_PRIORITY, &s_blink_task_handle);
+  BaseType_t result = xTaskCreate(
+      AIP_1620_BlinkTask, "aip1620_blink", AIP1620_BLINK_TASK_STACK_SIZE, NULL,
+      AIP1620_BLINK_TASK_PRIORITY, &s_blink_task_handle);
   if (result != pdPASS)
   {
     s_blink_task_handle = NULL;
@@ -1369,8 +1364,7 @@ static void AIP_1620_PowerTest_Task(void *argument)
         if (ret == ESP_OK)
         {
           ret = Inf_AIP_1620_Blink_Start(
-              INF_AIP1620_BLINK_ALL,
-              AIP1620_POWER_TEST_ICON_BLINK_INTERVAL_MS);
+              INF_AIP1620_BLINK_ALL, AIP1620_POWER_TEST_ICON_BLINK_INTERVAL_MS);
         }
         if (ret == ESP_OK)
         {
@@ -1384,8 +1378,7 @@ static void AIP_1620_PowerTest_Task(void *argument)
         ret = Inf_AIP_1620_Blink_Stop();
         if (ret == ESP_OK)
         {
-          MY_LOGI(
-              "POWER_TEST CONTENT_BLINK: DISABLED,已恢复完整显示内容。 ");
+          MY_LOGI("POWER_TEST CONTENT_BLINK: DISABLED,已恢复完整显示内容。 ");
         }
         break;
 

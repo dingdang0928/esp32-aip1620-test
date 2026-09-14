@@ -7,7 +7,7 @@ idf_component_register(
         "./Inf/Inf_RGB.c"
         "./Common/Com_Debug.c"
         "./Inf/Inf_RTC.c"
-
+        "./Dri/Dri_BLE.c"
     INCLUDE_DIRS
         "."
         "./App"

@@ -2,13 +2,14 @@
 #include "Inf_RGB.h"
 #include "esp_err.h"
 #include "Inf_AIP1620_Test.h"
-
+#include "Dri_BLE.h"
 inf_rtc_time_t virtual_time;
 void app_main(void)
 {
   // ESP_ERROR_CHECK(inf_rgb_init());
   // inf_rgb_deinit();
   // ESP_ERROR_CHECK(App_ClockDisplay_Init());
+  Dri_BLE_Init();
 
   // 测试AIP1620功耗模式
   Inf_AIP_1620_Power_Test();
