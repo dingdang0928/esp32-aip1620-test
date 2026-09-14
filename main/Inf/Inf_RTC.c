@@ -9,8 +9,8 @@
 
 static const char *TAG = "Inf_RTC";
 
-/* 认为 2024 年之后的时间才是有效时间 */
-#define INF_RTC_VALID_YEAR_MIN 2024
+/* 认为 2026 年之后的时间才是有效时间 */
+#define INF_RTC_VALID_YEAR_MIN 2026
 
 /**
  * @brief 判断是否为闰年

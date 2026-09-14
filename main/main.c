@@ -1,5 +1,4 @@
 #include "App_ClockDisplay.h"
-#include "Inf/inf_rgb.h"
 #include "Inf_RGB.h"
 #include "esp_err.h"
 #include "Inf_AIP1620_Test.h"
@@ -9,10 +8,9 @@ void app_main(void)
 {
   // ESP_ERROR_CHECK(inf_rgb_init());
   // inf_rgb_deinit();
-  ESP_ERROR_CHECK(App_ClockDisplay_Init());
+  // ESP_ERROR_CHECK(App_ClockDisplay_Init());
 
   // 测试AIP1620功耗模式
-
   Inf_AIP_1620_Power_Test();
 
   /*
@@ -28,5 +26,5 @@ void app_main(void)
   virtual_time.hour = 0;
   virtual_time.minute = 0;
   virtual_time.second = 0;
-  ESP_ERROR_CHECK(App_ClockDisplay_SetTime(&virtual_time));
+  // ESP_ERROR_CHECK(App_ClockDisplay_SetTime(&virtual_time));
 }

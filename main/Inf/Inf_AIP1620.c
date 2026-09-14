@@ -6,6 +6,9 @@
 #include "Common/Com_Debug.h"
 #include "driver/gpio.h"
 #include "esp_rom_sys.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "sdkconfig.h"
 
 #ifdef CONFIG_AIP1620_POWER_TEST
@@ -16,7 +19,6 @@
 
 #include "driver/uart.h"
 #include "driver/uart_vfs.h"
-#include "freertos/task.h"
 #endif
 
 /* 硬件引脚：CLK=36,DIN=39,STB=40；灯板由外部电源供电。 */
@@ -36,6 +38,11 @@
 #define AIP1620_DEFAULT_BRIGHTNESS 0U
 #define AIP1620_RAW_BRIGHTNESS_MAX 8U
 #define AIP1620_HALF_CLOCK_US 1U
+#define AIP1620_BLINK_INTERVAL_MIN_MS 50U
+#define AIP1620_BLINK_TASK_STACK_SIZE 3072U
+#define AIP1620_BLINK_TASK_PRIORITY 4U
+#define AIP1620_BLINK_EVENT_UPDATE (1UL << 0)
+#define AIP1620_BLINK_EVENT_STOP (1UL << 1)
 
 #ifdef CONFIG_AIP1620_POWER_TEST
 #define AIP1620_POWER_TEST_TASK_STACK_SIZE 9182U
@@ -110,6 +117,8 @@ typedef enum
   AIP1620_POWER_TEST_CMD_ICON4_STEADY = 16,
   AIP1620_POWER_TEST_CMD_ALL_ICONS_BLINK = 17,
   AIP1620_POWER_TEST_CMD_ALL_ICONS_STEADY = 18,
+  AIP1620_POWER_TEST_CMD_CONTENT_BLINK_ENABLE = 19,
+  AIP1620_POWER_TEST_CMD_CONTENT_BLINK_DISABLE = 20,
 } aip1620_power_test_command_t;
 #endif
 
@@ -132,9 +141,15 @@ static const uint8_t s_grid_segment_masks[AIP1620_GRID_COUNT] = {
     AIP1620_DIGIT_SEGMENTS, AIP1620_COLON_SEGMENTS, AIP1620_ICON_SEGMENTS,
 };
 static uint8_t s_grid_data[AIP1620_GRID_COUNT];
+static uint8_t s_blink_segments[AIP1620_GRID_COUNT];
 static uint8_t s_brightness = AIP1620_DEFAULT_BRIGHTNESS;
 static bool s_display_enabled;
 static bool s_initialized;
+static bool s_blink_visible = true;
+static uint32_t s_blink_interval_ms;
+static SemaphoreHandle_t s_driver_lock;
+static TaskHandle_t s_blink_task_handle;
+static TaskHandle_t s_blink_stop_waiter;
 
 #ifdef CONFIG_AIP1620_POWER_TEST
 static TaskHandle_t s_power_test_task_handle;
@@ -142,6 +157,27 @@ static TaskHandle_t s_icon_state_task_handle;
 static TaskHandle_t s_icon_state_stop_waiter;
 static volatile aip1620_icon_state_t s_icon_state = AIP1620_ICON_STATE_IDLE;
 #endif
+
+static bool AIP_1620_Lock(void)
+{
+  return (s_driver_lock != NULL) &&
+         (xSemaphoreTakeRecursive(s_driver_lock, portMAX_DELAY) == pdTRUE);
+}
+
+static void AIP_1620_Unlock(void)
+{
+  (void)xSemaphoreGiveRecursive(s_driver_lock);
+}
+
+static uint8_t AIP_1620_GetRenderedGrid(aip1620_grid_t grid)
+{
+  uint8_t segments = s_grid_data[grid];
+  if (!s_blink_visible)
+  {
+    segments &= (uint8_t)~s_blink_segments[grid];
+  }
+  return segments;
+}
 
 static void AIP_1620_SetGridSegments(aip1620_grid_t grid, uint8_t segments)
 {
@@ -265,7 +301,7 @@ static void AIP_1620_UpdateRam(void)
   AIP_1620_WriteByte(AIP1620_CMD_ADDR_BASE);
   for (uint8_t grid = 0; grid < AIP1620_GRID_COUNT; ++grid)
   {
-    AIP_1620_WriteByte(s_grid_data[grid]);
+    AIP_1620_WriteByte(AIP_1620_GetRenderedGrid((aip1620_grid_t)grid));
     AIP_1620_WriteByte(0x00U);  // 奇数地址仅用于 SEG13/SEG14,本灯板未使用
   }
   gpio_set_level(AIP1620_STB_GPIO, 1);
@@ -291,7 +327,7 @@ static void AIP_1620_UpdateGrid(aip1620_grid_t grid)
   gpio_set_level(AIP1620_STB_GPIO, 0);
   AIP_1620_Delay();
   AIP_1620_WriteByte(AIP1620_CMD_ADDR_BASE + ((uint8_t)grid * 2U));
-  AIP_1620_WriteByte(s_grid_data[grid]);
+  AIP_1620_WriteByte(AIP_1620_GetRenderedGrid(grid));
   gpio_set_level(AIP1620_STB_GPIO, 1);
   AIP_1620_Delay();
   AIP_1620_BusEnd();
@@ -310,26 +346,57 @@ static void AIP_1620_UpdateDisplayControl(void)
 
 esp_err_t Inf_AIP_1620_Init(void)
 {
+  if (s_driver_lock == NULL)
+  {
+    s_driver_lock = xSemaphoreCreateRecursiveMutex();
+    if (s_driver_lock == NULL)
+    {
+      return ESP_ERR_NO_MEM;
+    }
+  }
+
+  if (!AIP_1620_Lock())
+  {
+    return ESP_FAIL;
+  }
+
+  if (s_initialized)
+  {
+    AIP_1620_Unlock();
+    return ESP_ERR_INVALID_STATE;
+  }
+
   esp_err_t ret = AIP_1620_GPIO_Init();
   if (ret != ESP_OK)
   {
+    AIP_1620_Unlock();
     return ret;
   }
 
   memset(s_grid_data, 0, sizeof(s_grid_data));
+  memset(s_blink_segments, 0, sizeof(s_blink_segments));
   s_brightness = AIP1620_DEFAULT_BRIGHTNESS;
   s_display_enabled = true;
+  s_blink_visible = true;
+  s_blink_interval_ms = 0U;
 
   /* 严格按照手册顺序：模式、数据方式、地址及 RAM、显示控制。 */
   AIP_1620_WriteCommand(AIP1620_CMD_MODE_6_GRID_8_SEG);
   AIP_1620_UpdateRam();  // 上电后先清 RAM,避免开启时出现乱码
   AIP_1620_UpdateDisplayControl();
   s_initialized = true;
+  AIP_1620_Unlock();
   return ESP_OK;
 }
 
 esp_err_t Inf_AIP_1620_Deinit(void)
 {
+  esp_err_t blink_ret = Inf_AIP_1620_Blink_Stop();
+  if (blink_ret != ESP_OK)
+  {
+    return blink_ret;
+  }
+
 #ifdef CONFIG_AIP1620_POWER_TEST
   if (s_icon_state != AIP1620_ICON_STATE_IDLE)
   {
@@ -337,8 +404,14 @@ esp_err_t Inf_AIP_1620_Deinit(void)
   }
 #endif
 
+  if (!AIP_1620_Lock())
+  {
+    return s_initialized ? ESP_FAIL : ESP_OK;
+  }
+
   if (!s_initialized)
   {
+    AIP_1620_Unlock();
     return ESP_OK;
   }
 
@@ -348,44 +421,69 @@ esp_err_t Inf_AIP_1620_Deinit(void)
 
   /* 软件缓存复位；下次 Init 会重新清空芯片显示 RAM。 */
   memset(s_grid_data, 0, sizeof(s_grid_data));
+  memset(s_blink_segments, 0, sizeof(s_blink_segments));
   s_brightness = AIP1620_DEFAULT_BRIGHTNESS;
+  s_blink_visible = true;
+  s_blink_interval_ms = 0U;
 
   /* 灯板由外部电源供电,GPIO 设为高阻且关闭上下拉,避免额外漏电。 */
   esp_err_t ret = AIP_1620_GPIO_Release();
   if (ret != ESP_OK)
   {
+    AIP_1620_Unlock();
     return ret;
   }
 
   s_initialized = false;
+  AIP_1620_Unlock();
   return ESP_OK;
 }
 
-//
+//清空RAM,不更改显示开关
 void Inf_AIP_1620_ClearAll(void)
 {
+  if (!AIP_1620_Lock())
+  {
+    return;
+  }
   memset(s_grid_data, 0, sizeof(s_grid_data));
   AIP_1620_UpdateRam();
+  AIP_1620_Unlock();
 }
 
 #ifdef CONFIG_AIP1620_POWER_TEST
 void Inf_AIP_1620_Display_All(void)
 {
+  if (!AIP_1620_Lock())
+  {
+    return;
+  }
   memcpy(s_grid_data, s_grid_segment_masks, sizeof(s_grid_data));
   AIP_1620_UpdateRam();
+  AIP_1620_Unlock();
 }
 #endif
 
 void Inf_AIP_1620_Display_Enable(void)
 {
+  if (!AIP_1620_Lock())
+  {
+    return;
+  }
   s_display_enabled = true;
   AIP_1620_UpdateDisplayControl();
+  AIP_1620_Unlock();
 }
 
 void Inf_AIP_1620_Display_Disable(void)
 {
+  if (!AIP_1620_Lock())
+  {
+    return;
+  }
   s_display_enabled = false;
   AIP_1620_UpdateDisplayControl();
+  AIP_1620_Unlock();
 }
 
 static void AIP_1620_SetRawBrightness(uint8_t brightness)
@@ -401,7 +499,12 @@ static void AIP_1620_SetRawBrightness(uint8_t brightness)
 #ifdef CONFIG_AIP1620_POWER_TEST
 void Inf_AIP_1620_Set_Brightness(uint8_t raw_brightness)
 {
+  if (!AIP_1620_Lock())
+  {
+    return;
+  }
   AIP_1620_SetRawBrightness(raw_brightness);
+  AIP_1620_Unlock();
 }
 #endif
 
@@ -416,7 +519,12 @@ esp_err_t Inf_AIP_1620_Set_Brightness_Level(inf_aip1620_brightness_t brightness)
     return ESP_ERR_INVALID_ARG;
   }
 
+  if (!AIP_1620_Lock())
+  {
+    return ESP_ERR_INVALID_STATE;
+  }
   AIP_1620_SetRawBrightness(raw_brightness[brightness]);
+  AIP_1620_Unlock();
   return ESP_OK;
 }
 
@@ -428,13 +536,23 @@ void Inf_AIP_1620_Display_Digit(uint8_t position, uint8_t digit)
     return;
   }
 
+  if (!AIP_1620_Lock())
+  {
+    return;
+  }
   AIP_1620_SetGridSegments(s_digit_grids[position], s_digit_segments[digit]);
   AIP_1620_UpdateRam();
+  AIP_1620_Unlock();
 }
 #endif
 
 void Inf_AIP_1620_Display_Number(uint16_t number, bool leading_zero)
 {
+  if (!AIP_1620_Lock())
+  {
+    return;
+  }
+
   if (number > 9999U)
   {
     number = 9999U;
@@ -452,6 +570,7 @@ void Inf_AIP_1620_Display_Number(uint16_t number, bool leading_zero)
     number /= 10U;
   }
   AIP_1620_UpdateRam();
+  AIP_1620_Unlock();
 }
 
 esp_err_t Inf_AIP_1620_Display_Time(uint8_t hour, uint8_t minute,
@@ -462,6 +581,10 @@ esp_err_t Inf_AIP_1620_Display_Time(uint8_t hour, uint8_t minute,
     return ESP_ERR_INVALID_ARG;
   }
 
+  if (!AIP_1620_Lock())
+  {
+    return ESP_ERR_INVALID_STATE;
+  }
   AIP_1620_SetGridSegments(s_digit_grids[0], s_digit_segments[hour / 10U]);
   AIP_1620_SetGridSegments(s_digit_grids[1], s_digit_segments[hour % 10U]);
   AIP_1620_SetGridSegments(s_digit_grids[2], s_digit_segments[minute / 10U]);
@@ -469,26 +592,229 @@ esp_err_t Inf_AIP_1620_Display_Time(uint8_t hour, uint8_t minute,
   AIP_1620_SetGridSegments(AIP1620_GRID_COLON,
                            colon_enable ? AIP1620_COLON_SEGMENTS : 0x00U);
   AIP_1620_UpdateRam();
+  AIP_1620_Unlock();
   return ESP_OK;
 }
 
 void Inf_AIP_1620_Display_Mid_Dot(bool enable)
 {
+  if (!AIP_1620_Lock())
+  {
+    return;
+  }
   AIP_1620_SetGridSegments(AIP1620_GRID_COLON,
                            enable ? AIP1620_COLON_SEGMENTS : 0x00U);
   AIP_1620_UpdateRam();
+  AIP_1620_Unlock();
 }
 
 void Inf_AIP_1620_Display_Icons(uint8_t icon_mask)
 {
+  if (!AIP_1620_Lock())
+  {
+    return;
+  }
   uint8_t new_icon_data = icon_mask & s_grid_segment_masks[AIP1620_GRID_ICONS];
   if (s_grid_data[AIP1620_GRID_ICONS] == new_icon_data)
   {
+    AIP_1620_Unlock();
     return;
   }
 
   s_grid_data[AIP1620_GRID_ICONS] = new_icon_data;
   AIP_1620_UpdateGrid(AIP1620_GRID_ICONS);
+  AIP_1620_Unlock();
+}
+
+static void AIP_1620_ConfigureBlinkSegments(uint16_t content_mask)
+{
+  memset(s_blink_segments, 0, sizeof(s_blink_segments));
+
+  for (uint8_t position = 0U; position < INF_AIP1620_DIGIT_COUNT; ++position)
+  {
+    if ((content_mask & (1U << position)) != 0U)
+    {
+      s_blink_segments[s_digit_grids[position]] = AIP1620_DIGIT_SEGMENTS;
+    }
+  }
+
+  if ((content_mask & INF_AIP1620_BLINK_COLON) != 0U)
+  {
+    s_blink_segments[AIP1620_GRID_COLON] = AIP1620_COLON_SEGMENTS;
+  }
+
+  s_blink_segments[AIP1620_GRID_ICONS] =
+      (uint8_t)((content_mask >> 5U) & AIP1620_ICON_SEGMENTS);
+}
+
+static void AIP_1620_BlinkTask(void *argument)
+{
+  (void)argument;
+
+  while (true)
+  {
+    uint32_t interval_ms = AIP1620_BLINK_INTERVAL_MIN_MS;
+    if (AIP_1620_Lock())
+    {
+      interval_ms = s_blink_interval_ms;
+      AIP_1620_Unlock();
+    }
+
+    TickType_t wait_ticks = pdMS_TO_TICKS(interval_ms);
+    if (wait_ticks == 0U)
+    {
+      wait_ticks = 1U;
+    }
+
+    uint32_t events = 0U;
+    BaseType_t notified =
+        xTaskNotifyWait(0U, UINT32_MAX, &events, wait_ticks);
+    if ((notified == pdTRUE) &&
+        ((events & AIP1620_BLINK_EVENT_STOP) != 0U))
+    {
+      break;
+    }
+
+    if (!AIP_1620_Lock())
+    {
+      break;
+    }
+
+    if ((notified == pdTRUE) &&
+        ((events & AIP1620_BLINK_EVENT_UPDATE) != 0U))
+    {
+      s_blink_visible = true;
+    }
+    else
+    {
+      s_blink_visible = !s_blink_visible;
+    }
+
+    if (s_initialized)
+    {
+      AIP_1620_UpdateRam();
+    }
+    AIP_1620_Unlock();
+  }
+
+  TaskHandle_t stop_waiter = NULL;
+  if (AIP_1620_Lock())
+  {
+    memset(s_blink_segments, 0, sizeof(s_blink_segments));
+    s_blink_visible = true;
+    s_blink_interval_ms = 0U;
+    if (s_initialized)
+    {
+      AIP_1620_UpdateRam();
+    }
+
+    stop_waiter = s_blink_stop_waiter;
+    s_blink_stop_waiter = NULL;
+    s_blink_task_handle = NULL;
+    AIP_1620_Unlock();
+  }
+
+  if (stop_waiter != NULL)
+  {
+    xTaskNotifyGive(stop_waiter);
+  }
+  vTaskDelete(NULL);
+}
+
+esp_err_t Inf_AIP_1620_Blink_Start(uint16_t content_mask,
+                                    uint32_t interval_ms)
+{
+  if ((content_mask == INF_AIP1620_BLINK_NONE) ||
+      ((content_mask & (uint16_t)~INF_AIP1620_BLINK_ALL) != 0U) ||
+      (interval_ms < AIP1620_BLINK_INTERVAL_MIN_MS))
+  {
+    return ESP_ERR_INVALID_ARG;
+  }
+
+  if (!AIP_1620_Lock())
+  {
+    return ESP_ERR_INVALID_STATE;
+  }
+  if (!s_initialized)
+  {
+    AIP_1620_Unlock();
+    return ESP_ERR_INVALID_STATE;
+  }
+
+  AIP_1620_ConfigureBlinkSegments(content_mask);
+  s_blink_interval_ms = interval_ms;
+  s_blink_visible = true;
+  AIP_1620_UpdateRam();
+
+  TaskHandle_t blink_task = s_blink_task_handle;
+  if (blink_task != NULL)
+  {
+    AIP_1620_Unlock();
+    return (xTaskNotify(blink_task, AIP1620_BLINK_EVENT_UPDATE, eSetBits) ==
+            pdPASS)
+               ? ESP_OK
+               : ESP_FAIL;
+  }
+
+  BaseType_t result =
+      xTaskCreate(AIP_1620_BlinkTask, "aip1620_blink",
+                  AIP1620_BLINK_TASK_STACK_SIZE, NULL,
+                  AIP1620_BLINK_TASK_PRIORITY, &s_blink_task_handle);
+  if (result != pdPASS)
+  {
+    s_blink_task_handle = NULL;
+    memset(s_blink_segments, 0, sizeof(s_blink_segments));
+    s_blink_interval_ms = 0U;
+    AIP_1620_Unlock();
+    return ESP_ERR_NO_MEM;
+  }
+
+  AIP_1620_Unlock();
+  return ESP_OK;
+}
+
+esp_err_t Inf_AIP_1620_Blink_Stop(void)
+{
+  if (s_driver_lock == NULL)
+  {
+    return ESP_OK;
+  }
+  if (!AIP_1620_Lock())
+  {
+    return ESP_FAIL;
+  }
+
+  TaskHandle_t blink_task = s_blink_task_handle;
+  if (blink_task == NULL)
+  {
+    memset(s_blink_segments, 0, sizeof(s_blink_segments));
+    s_blink_visible = true;
+    s_blink_interval_ms = 0U;
+    AIP_1620_Unlock();
+    return ESP_OK;
+  }
+  if ((blink_task == xTaskGetCurrentTaskHandle()) ||
+      (s_blink_stop_waiter != NULL))
+  {
+    AIP_1620_Unlock();
+    return ESP_ERR_INVALID_STATE;
+  }
+
+  s_blink_stop_waiter = xTaskGetCurrentTaskHandle();
+  AIP_1620_Unlock();
+
+  if (xTaskNotify(blink_task, AIP1620_BLINK_EVENT_STOP, eSetBits) != pdPASS)
+  {
+    if (AIP_1620_Lock())
+    {
+      s_blink_stop_waiter = NULL;
+      AIP_1620_Unlock();
+    }
+    return ESP_FAIL;
+  }
+
+  (void)ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+  return ESP_OK;
 }
 
 #ifdef CONFIG_AIP1620_POWER_TEST
@@ -538,7 +864,9 @@ static void AIP_1620_PowerTest_PrintMenu(void)
   MY_LOGI("16: 最下方ICON4常亮 ");
   MY_LOGI("17: 全部ICON持续闪烁 ");
   MY_LOGI("18: 全部ICON常亮 ");
-  MY_LOGI("19~30: 预留 ");
+  MY_LOGI("19: 当前全部显示内容开始闪烁(亮/灭各500ms) ");
+  MY_LOGI("20: 停止内容闪烁并恢复完整显示 ");
+  MY_LOGI("21~30: 预留 ");
   MY_LOGI("31~35: 典型页面,亮度1~5 ");
   MY_LOGI("41~45: 全亮页面,亮度1~5 ");
   MY_LOGI("51~55: 空白页面,亮度1~5 ");
@@ -870,12 +1198,18 @@ static esp_err_t AIP_1620_PowerTest_EnterIconMode(int command)
     return ESP_OK;
   }
 
+  esp_err_t ret = Inf_AIP_1620_Blink_Stop();
+  if (ret != ESP_OK)
+  {
+    return ret;
+  }
+
   if (s_icon_state != AIP1620_ICON_STATE_IDLE)
   {
     Inf_AIP_1620_Low_Battery_Warning_Disable();
   }
 
-  esp_err_t ret = AIP_1620_PowerTest_EnsureInit();
+  ret = AIP_1620_PowerTest_EnsureInit();
   if (ret != ESP_OK)
   {
     return ret;
@@ -1028,6 +1362,31 @@ static void AIP_1620_PowerTest_Task(void *argument)
       case AIP1620_POWER_TEST_CMD_ALL_ICONS_BLINK:
       case AIP1620_POWER_TEST_CMD_ALL_ICONS_STEADY:
         ret = AIP_1620_PowerTest_EnterIconMode(command);
+        break;
+
+      case AIP1620_POWER_TEST_CMD_CONTENT_BLINK_ENABLE:
+        ret = AIP_1620_PowerTest_EnsureInit();
+        if (ret == ESP_OK)
+        {
+          ret = Inf_AIP_1620_Blink_Start(
+              INF_AIP1620_BLINK_ALL,
+              AIP1620_POWER_TEST_ICON_BLINK_INTERVAL_MS);
+        }
+        if (ret == ESP_OK)
+        {
+          MY_LOGI(
+              "POWER_TEST CONTENT_BLINK: ENABLED,全部当前显示内容闪烁,"
+              "亮/灭各500ms。 ");
+        }
+        break;
+
+      case AIP1620_POWER_TEST_CMD_CONTENT_BLINK_DISABLE:
+        ret = Inf_AIP_1620_Blink_Stop();
+        if (ret == ESP_OK)
+        {
+          MY_LOGI(
+              "POWER_TEST CONTENT_BLINK: DISABLED,已恢复完整显示内容。 ");
+        }
         break;
 
       case 0:
