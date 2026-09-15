@@ -18,7 +18,7 @@
 
 #define AIP1620_GRID_COUNT 6U              // 六位八段显示模式
 #define AIP1620_DEFAULT_BRIGHTNESS_RAW 0U  // 默认亮度
-#define AIP1620_HALF_CLOCK_US 1U
+#define AIP1620_HALF_CLOCK_US 1U           // 时间间隔
 
 #define AIP1620_SEG1 (1U << 0)
 #define AIP1620_SEG2 (1U << 1)
@@ -244,11 +244,16 @@ esp_err_t Inf_AIP1620_WriteFrame(const inf_aip1620_frame_t *frame)
 
   for (uint8_t index = 0U; index < INF_AIP1620_DIGIT_COUNT; ++index)
   {
-    uint8_t digit = frame->digits[index];
+    const uint8_t digit = frame->digits[index];
     if ((digit > 9U) && (digit != INF_AIP1620_DIGIT_BLANK))
     {
       return ESP_ERR_INVALID_ARG;
     }
+  }
+
+  for (uint8_t index = 0U; index < INF_AIP1620_DIGIT_COUNT; ++index)
+  {
+    const uint8_t digit = frame->digits[index];
     s_grid_data[index] =
         (digit == INF_AIP1620_DIGIT_BLANK) ? 0U : s_digit_segments[digit];
   }
@@ -281,7 +286,8 @@ esp_err_t Inf_AIP1620_SetEnabled(bool enabled)
 
 esp_err_t Inf_AIP1620_SetBrightness(inf_aip1620_brightness_t brightness)
 {
-  if ((uint8_t)brightness >= INF_AIP1620_BRIGHTNESS_COUNT)
+  const unsigned int brightness_index = (unsigned int)brightness;
+  if (brightness_index >= (unsigned int)INF_AIP1620_BRIGHTNESS_COUNT)
   {
     return ESP_ERR_INVALID_ARG;
   }
@@ -290,6 +296,6 @@ esp_err_t Inf_AIP1620_SetBrightness(inf_aip1620_brightness_t brightness)
     return ESP_ERR_INVALID_STATE;
   }
 
-  s_brightness = s_brightness_raw[brightness];
+  s_brightness = s_brightness_raw[brightness_index];
   return AIP1620_UpdateDisplayControl();
 }
