@@ -305,8 +305,8 @@ esp_err_t App_DisplayAIP1620_Init(void)
   {
     return ret;
   }
-
-  ret = Inf_AIP1620_SetBrightness(INF_AIP1620_BRIGHTNESS_3);
+  // 默认为最低亮度
+  ret = Inf_AIP1620_SetBrightness(INF_AIP1620_BRIGHTNESS_1);
   if (ret != ESP_OK)
   {
     (void)Inf_AIP1620_Deinit();

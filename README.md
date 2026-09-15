@@ -2,6 +2,14 @@
 
 ESP32-S3 firmware based on ESP-IDF.
 
+## Requirements baseline
+
+The current product and firmware requirements baseline is
+[`docs/T6350_需求基线_V0.3.md`](docs/T6350_需求基线_V0.3.md). It is derived from
+the 2026-09-09 V0.3 technical specification and IR-SR requirement breakdown.
+Items marked as GAP or pending in those sources must not be treated as finalized
+requirements.
+
 ## AiP1620 architecture
 
 AiP1620 follows a strict two-layer design:

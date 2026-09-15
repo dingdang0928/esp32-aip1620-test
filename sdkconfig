@@ -598,7 +598,8 @@ CONFIG_PARTITION_TABLE_MD5=y
 #
 # Project feature configuration
 #
-CONFIG_AIP1620_POWER_TEST=y
+# CONFIG_AIP1620_POWER_TEST is not set
+CONFIG_SLEEP_RECORD_UART_TEST=y
 # end of Project feature configuration
 
 #

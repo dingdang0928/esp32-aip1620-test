@@ -7,4 +7,13 @@ config AIP1620_POWER_TEST
         Compile the application-layer UART power-test task.
         Keep this disabled in production firmware.
 
+config SLEEP_RECORD_UART_TEST
+    bool "Enable sleep-record UART test console"
+    default y
+    depends on !AIP1620_POWER_TEST
+    help
+        Enable the development-only UART commands for exercising the
+        App_SleepRecord state machine. Disable this in production firmware.
+        This option and AIP1620_POWER_TEST cannot share console UART0.
+
 endmenu
