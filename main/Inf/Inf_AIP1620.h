@@ -12,7 +12,7 @@ extern "C"
 #endif
 
 #define INF_AIP1620_DIGIT_COUNT 4U
-#define INF_AIP1620_DIGIT_BLANK UINT8_MAX
+#define INF_AIP1620_DIGIT_BLANK UINT8_MAX  // 用于判断是否显示空白
 
   typedef enum
   {
@@ -35,9 +35,15 @@ extern "C"
   } inf_aip1620_icon_t;
 
   /** AiP1620 的一帧逻辑显示内容。数字可取 0~9 或 DIGIT_BLANK。 */
+  /**
+   * @brief AiP1620 一帧逻辑显示内容。
+   *
+   * digits[] 对应各数字显示位，每位可取 0~9 或
+   * INF_AIP1620_DIGIT_BLANK。
+   */
   typedef struct
   {
-    uint8_t digits[INF_AIP1620_DIGIT_COUNT];
+    uint8_t digits[INF_AIP1620_DIGIT_COUNT];  //
     bool colon_enabled;
     uint8_t icon_mask;
   } inf_aip1620_frame_t;

@@ -6,7 +6,7 @@
 
 void app_main(void)
 {
-  Dri_BLE_Init();
+  // Dri_BLE_Init();
 
 #if CONFIG_AIP1620_POWER_TEST
   // 测试AIP1620功耗模式

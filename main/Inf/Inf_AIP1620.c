@@ -6,18 +6,18 @@
 #include "driver/gpio.h"
 #include "esp_rom_sys.h"
 
-#define AIP1620_CLK_GPIO GPIO_NUM_36
-#define AIP1620_DIN_GPIO GPIO_NUM_39
-#define AIP1620_STB_GPIO GPIO_NUM_40
+#define AIP1620_CLK_GPIO GPIO_NUM_36  // CLK对应的GPIO36引脚
+#define AIP1620_DIN_GPIO GPIO_NUM_39  // DIN对应的GPIO39引脚
+#define AIP1620_STB_GPIO GPIO_NUM_40  // STB对应的GPIO40引脚
 
-#define AIP1620_CMD_MODE_6_GRID_8_SEG 0x02U
-#define AIP1620_CMD_DATA_AUTO_ADDR 0x40U
-#define AIP1620_CMD_ADDR_BASE 0xC0U
-#define AIP1620_CMD_DISPLAY_BASE 0x80U
-#define AIP1620_CMD_DISPLAY_ON_BIT 0x08U
+#define AIP1620_CMD_MODE_6_GRID_8_SEG 0x02U  // 六位八段显示模式
+#define AIP1620_CMD_DATA_AUTO_ADDR 0x40U     // 地址自加模式
+#define AIP1620_CMD_ADDR_BASE 0xC0U          // 1100 0000 = 0XC0  显示地址00H
+#define AIP1620_CMD_DISPLAY_BASE 0x80U    // 1000 0000 = 0X80 设置脉冲宽度为1/16
+#define AIP1620_CMD_DISPLAY_ON_BIT 0x08U  // 显示位,|表示开启显示
 
-#define AIP1620_GRID_COUNT 6U
-#define AIP1620_DEFAULT_BRIGHTNESS_RAW 0U
+#define AIP1620_GRID_COUNT 6U              // 六位八段显示模式
+#define AIP1620_DEFAULT_BRIGHTNESS_RAW 0U  // 默认亮度
 #define AIP1620_HALF_CLOCK_US 1U
 
 #define AIP1620_SEG1 (1U << 0)
@@ -156,7 +156,9 @@ static esp_err_t AIP1620_UpdateRam(void)
   AIP1620_WriteByte(AIP1620_CMD_ADDR_BASE);
   for (uint8_t grid = 0U; grid < AIP1620_GRID_COUNT; ++grid)
   {
+    /* xxHL: SEG1~SEG8 */
     AIP1620_WriteByte(s_grid_data[grid]);
+    /* xxHU: SEG13~SEG14，当前硬件未使用，清零 */
     AIP1620_WriteByte(0x00U);
   }
   gpio_set_level(AIP1620_STB_GPIO, 1);
