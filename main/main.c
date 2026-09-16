@@ -3,20 +3,13 @@
 #include "App_SleepRecord.h"
 #include "App_SleepRecordUartTest.h"
 #include "Dri_BLE.h"
-#include "Dri_NVS.h"
 #include "esp_err.h"
-#include "esp_log.h"
 #include "sdkconfig.h"
-#include <stdint.h>
-#include <string.h>
-
-
-
 
 void app_main(void)
 {
-  // ESP_ERROR_CHECK(App_ClockDisplay_Init());
   ESP_ERROR_CHECK(App_SleepRecord_Init());
+  ESP_ERROR_CHECK(App_ClockDisplay_Init());
   Dri_BLE_Init();
 
 #if CONFIG_AIP1620_POWER_TEST
@@ -29,8 +22,8 @@ void app_main(void)
 #endif
 
   /*
-   * 正式产品在蓝牙配网、网络校时、按键设置或外部 RTC 读取成功后，
-   * 调用 App_ClockDisplay_SetTime() 更新时间。
+   * 正式产品收到云端 UTC 毫秒时间戳和 POSIX 时区后，调用
+   * Inf_RTC_SyncFromCloud()。时钟显示任务会自动读取并刷新本地时间。
    * 显示刷新由 App_ClockDisplay 内部任务负责，app_main 无需轮询。
    */
 }

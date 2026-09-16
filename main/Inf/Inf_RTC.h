@@ -1,82 +1,68 @@
-#ifndef INF_RTC_H
-#define INF_RTC_H
+/**
+ * @file Inf_RTC.h
+ * @brief 云端校时和本地时间接口。
+ *
+ * 云端须同时下发 UTC Unix 毫秒时间戳和 POSIX TZ 字符串。设备不使用 NTP，
+ * 未成功校时前，时间读取接口返回 ESP_ERR_INVALID_STATE。
+ */
 
-#include <stdint.h>
-#include "esp_err.h"
+#ifndef PROJECT_NAME_INF_RTC_H
+#define PROJECT_NAME_INF_RTC_H
+
 #include <stdbool.h>
+#include <stdint.h>
+#include <time.h>
+
+#include "esp_err.h"
 
 #ifdef __cplusplus
 extern "C"
 {
 #endif
 
-  /**
-   * @brief RTC 时间结构体
-   */
-  typedef struct
-  {
-    uint16_t year;   /**< 年，例如 2026 */
-    uint8_t month;   /**< 月，1~12 */
-    uint8_t day;     /**< 日，1~31 */
-    uint8_t hour;    /**< 时，0~23 */
-    uint8_t minute;  /**< 分，0~59 */
-    uint8_t second;  /**< 秒，0~59 */
-    uint8_t weekday; /**< 星期，0=星期日，1=星期一 ... 6=星期六 */
-  } inf_rtc_time_t;
+/** POSIX TZ 字符串最大长度，不包含结尾的 '\0'。 */
+#define INF_RTC_TIMEZONE_MAX_LENGTH 96U
 
   /**
-   * @brief 初始化内部 RTC
+   * @brief 初始化时间模块，默认使用 UTC0，并进入等待云端校时状态。
    *
-   * 默认设置为中国标准时间 UTC+8。
-   *
-   * @return ESP_OK 成功
+   * 重复调用不会修改已经设置的时间和时区。
    */
   esp_err_t Inf_RTC_Init(void);
 
   /**
-   * @brief 设置 RTC 时间
+   * @brief 应用云端下发的 UTC 时间和 POSIX 时区。
    *
-   * @param rtc_time 要设置的时间
-   *
-   * @return
-   *      - ESP_OK 成功
-   *      - ESP_ERR_INVALID_ARG 参数错误
+   * @param[in] utc_time_ms UTC Unix 时间戳，单位毫秒。
+   * @param[in] timezone POSIX TZ 字符串，例如 `CST-8`；有夏令时的地区应由
+   *                     云端下发包含夏令时规则的完整字符串。
    */
-  esp_err_t Inf_RTC_SetTime(const inf_rtc_time_t *rtc_time);
+  esp_err_t Inf_RTC_SyncFromCloud(int64_t utc_time_ms, const char *timezone);
 
-  /**
-   * @brief 获取当前 RTC 时间
-   *
-   * @param rtc_time 用于保存当前时间
-   *
-   * @return
-   *      - ESP_OK 成功
-   *      - ESP_ERR_INVALID_ARG 参数错误
-   */
-  esp_err_t Inf_RTC_GetTime(inf_rtc_time_t *rtc_time);
-
-  /**
-   * @brief 获取 Unix 时间戳
-   *
-   * @return 当前 Unix 时间戳，单位秒
-   */
-  int64_t Inf_RTC_GetTimestamp(void);
-
-  /**
-   * @brief 判断当前 RTC 时间是否有效
-   *
-   * @return true 有效
-   * @return false 无效
-   */
+  /** @brief 判断设备是否已经成功完成云端校时。 */
   bool Inf_RTC_IsTimeValid(void);
 
   /**
-   * @brief 打印当前 RTC 时间
+   * @brief 获取当前 UTC Unix 时间戳，单位秒。
+   * @retval ESP_ERR_INVALID_STATE 尚未初始化或尚未完成云端校时。
    */
-  void Inf_RTC_PrintTime(void);
+  esp_err_t Inf_RTC_GetUtcTimestamp(int64_t *utc_time_s);
+
+  /**
+   * @brief 获取当前时区下的本地日历时间。
+   * @retval ESP_ERR_INVALID_STATE 尚未初始化或尚未完成云端校时。
+   */
+  esp_err_t Inf_RTC_GetLocalTime(struct tm *local_time);
+
+  /**
+   * @brief 将 UTC Unix 秒时间戳转换为当前时区的本地日历时间。
+   * @retval ESP_ERR_INVALID_STATE 尚未初始化或尚未完成云端校时。
+   */
+  esp_err_t Inf_RTC_ConvertUtcToLocal(int64_t utc_time_s,
+                                      struct tm *local_time);
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* INF_RTC_H */
+#endif /* PROJECT_NAME_INF_RTC_H */

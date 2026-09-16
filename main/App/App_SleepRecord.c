@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "Inf_RTC.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -224,22 +225,6 @@ esp_err_t App_SleepRecord_SetBound(bool bound)
   return ESP_OK;
 }
 
-esp_err_t App_SleepRecord_SetTime(const inf_rtc_time_t *time)
-{
-  if (time == NULL)
-  {
-    return ESP_ERR_INVALID_ARG;
-  }
-  if (App_SleepRecord_CheckReady() != ESP_OK)
-  {
-    return ESP_ERR_INVALID_STATE;
-  }
-  xSemaphoreTake(s_mutex, portMAX_DELAY);
-  esp_err_t err = Inf_RTC_SetTime(time);
-  xSemaphoreGive(s_mutex);
-  return err;
-}
-
 esp_err_t App_SleepRecord_Start(void)
 {
   esp_err_t err = App_SleepRecord_CheckReady();
@@ -260,7 +245,13 @@ esp_err_t App_SleepRecord_Start(void)
     return ESP_ERR_INVALID_STATE;
   }
 
-  int64_t timestamp = Inf_RTC_GetTimestamp();
+  int64_t timestamp = 0;
+  err = Inf_RTC_GetUtcTimestamp(&timestamp);
+  if (err != ESP_OK)
+  {
+    xSemaphoreGive(s_mutex);
+    return err;
+  }
   if ((timestamp < 0) || ((uint64_t)timestamp > UINT32_MAX))
   {
     xSemaphoreGive(s_mutex);
@@ -325,21 +316,16 @@ esp_err_t App_SleepRecord_Stop(uint32_t *new_record_id)
   }
   else
   {
-    if (!Inf_RTC_IsTimeValid())
-    {
-      xSemaphoreGive(s_mutex);
-      return ESP_ERR_INVALID_STATE;
-    }
-
-    int64_t timestamp = Inf_RTC_GetTimestamp();
-    if ((timestamp < 0) || ((uint64_t)timestamp > UINT32_MAX))
+    uint64_t end_timestamp_value =
+        (uint64_t)s_context.start_timestamp + (uint64_t)elapsed_seconds;
+    if (end_timestamp_value > UINT32_MAX)
     {
       xSemaphoreGive(s_mutex);
       return ESP_ERR_INVALID_RESPONSE;
     }
 
     uint32_t end_timestamp =
-        App_SleepRecord_RoundDownToMinute((uint32_t)timestamp);
+        App_SleepRecord_RoundDownToMinute((uint32_t)end_timestamp_value);
     if (end_timestamp < s_context.start_timestamp)
     {
       xSemaphoreGive(s_mutex);
@@ -606,7 +592,13 @@ esp_err_t App_SleepRecord_TestSetElapsedMinutes(uint32_t elapsed_minutes)
                      APP_SLEEP_RECORD_US_PER_SECOND;
   s_context.start_monotonic_us = esp_timer_get_time() - delta_us;
 
-  int64_t now = Inf_RTC_GetTimestamp();
+  int64_t now = 0;
+  err = Inf_RTC_GetUtcTimestamp(&now);
+  if (err != ESP_OK)
+  {
+    xSemaphoreGive(s_mutex);
+    return err;
+  }
   int64_t test_start = now -
                        ((int64_t)elapsed_minutes *
                         APP_SLEEP_RECORD_SECONDS_PER_MINUTE);

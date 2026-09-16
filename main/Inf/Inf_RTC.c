@@ -1,244 +1,232 @@
 #include "Inf_RTC.h"
 
-#include <stdbool.h>
+#include <ctype.h>
+#include <errno.h>
+#include <inttypes.h>
 #include <stdlib.h>
-#include <time.h>
-#include <sys/time.h>
+#include <string.h>
 
+#include "Dri_RTC.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "Inf_RTC";
 
-/* 认为 2026 年之后的时间才是有效时间 */
-#define INF_RTC_VALID_YEAR_MIN 2026
+/* 云端时间只接受 2024-01-01（含）至 2100-01-01（不含）。 */
+#define INF_RTC_MIN_UTC_TIME_MS INT64_C(1704067200000)
+#define INF_RTC_MAX_UTC_TIME_MS INT64_C(4102444800000)
 
-/**
- * @brief 判断是否为闰年
- */
-static bool Inf_RTC_IsLeapYear(uint16_t year)
+static SemaphoreHandle_t s_mutex;
+static StaticSemaphore_t s_mutex_storage;
+static bool s_initialized;
+static bool s_time_valid;
+
+static bool Inf_RTC_IsTimezoneSafe(const char *timezone)
 {
-  if ((year % 400U) == 0U)
-  {
-    return true;
-  }
-
-  if ((year % 100U) == 0U)
+  if (timezone == NULL)
   {
     return false;
   }
 
-  return ((year % 4U) == 0U);
-}
-
-/**
- * @brief 获取指定月份的天数
- */
-static uint8_t Inf_RTC_GetDaysInMonth(uint16_t year, uint8_t month)
-{
-  static const uint8_t days_table[12] = {31, 28, 31, 30, 31, 30,
-                                         31, 31, 30, 31, 30, 31};
-
-  if ((month < 1U) || (month > 12U))
-  {
-    return 0U;
-  }
-
-  if ((month == 2U) && Inf_RTC_IsLeapYear(year))
-  {
-    return 29U;
-  }
-
-  return days_table[month - 1U];
-}
-
-/**
- * @brief 检查时间参数是否合法
- */
-static bool Inf_RTC_CheckTime(const inf_rtc_time_t *rtc_time)
-{
-  if (rtc_time == NULL)
+  size_t length = strnlen(timezone, INF_RTC_TIMEZONE_MAX_LENGTH + 1U);
+  if ((length == 0U) || (length > INF_RTC_TIMEZONE_MAX_LENGTH))
   {
     return false;
   }
 
-  if ((rtc_time->year < 1970U) || (rtc_time->year > 2099U))
+  for (size_t index = 0U; index < length; ++index)
   {
-    return false;
+    unsigned char character = (unsigned char)timezone[index];
+    if (!isprint(character) || isspace(character))
+    {
+      return false;
+    }
   }
-
-  if ((rtc_time->month < 1U) || (rtc_time->month > 12U))
-  {
-    return false;
-  }
-
-  uint8_t days = Inf_RTC_GetDaysInMonth(rtc_time->year, rtc_time->month);
-
-  if ((rtc_time->day < 1U) || (rtc_time->day > days))
-  {
-    return false;
-  }
-
-  if (rtc_time->hour > 23U)
-  {
-    return false;
-  }
-
-  if (rtc_time->minute > 59U)
-  {
-    return false;
-  }
-
-  if (rtc_time->second > 59U)
-  {
-    return false;
-  }
-
   return true;
 }
 
 esp_err_t Inf_RTC_Init(void)
 {
-  /*
-   * 设置中国标准时间。
-   *
-   * POSIX TZ 格式里面：
-   * CST-8 表示 UTC + 8。
-   */
-  if (setenv("TZ", "CST-8", 1) != 0)
+  if (s_mutex == NULL)
   {
-    ESP_LOGE(TAG, "设置时区失败");
-    return ESP_FAIL;
+    s_mutex = xSemaphoreCreateMutexStatic(&s_mutex_storage);
+    if (s_mutex == NULL)
+    {
+      return ESP_ERR_NO_MEM;
+    }
   }
 
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  if (s_initialized)
+  {
+    xSemaphoreGive(s_mutex);
+    return ESP_OK;
+  }
+
+  if (setenv("TZ", "UTC0", 1) != 0)
+  {
+    ESP_LOGE(TAG, "初始化时区失败：errno=%d", errno);
+    xSemaphoreGive(s_mutex);
+    return ESP_FAIL;
+  }
   tzset();
 
-  ESP_LOGI(TAG, "RTC 初始化完成，时区 UTC+8");
+  s_time_valid = false;
+  s_initialized = true;
+  xSemaphoreGive(s_mutex);
 
+  ESP_LOGI(TAG, "时间模块初始化完成，等待云端校时");
   return ESP_OK;
 }
 
-esp_err_t Inf_RTC_SetTime(const inf_rtc_time_t *rtc_time)
+esp_err_t Inf_RTC_SyncFromCloud(int64_t utc_time_ms, const char *timezone)
 {
-  if (!Inf_RTC_CheckTime(rtc_time))
-  {
-    ESP_LOGE(TAG, "RTC 时间参数非法");
-    return ESP_ERR_INVALID_ARG;
-  }
-
-  struct tm time_info = {0};
-
-  /*
-   * struct tm:
-   *
-   * tm_year 从 1900 开始
-   * tm_mon  从 0 开始
-   */
-  time_info.tm_year = (int)rtc_time->year - 1900;
-  time_info.tm_mon = (int)rtc_time->month - 1;
-  time_info.tm_mday = rtc_time->day;
-
-  time_info.tm_hour = rtc_time->hour;
-  time_info.tm_min = rtc_time->minute;
-  time_info.tm_sec = rtc_time->second;
-
-  /*
-   * tm_isdst = -1
-   * 让 C 库自己判断夏令时。
-   *
-   * 中国当前没有夏令时，但这样写更加通用。
-   */
-  time_info.tm_isdst = -1;
-
-  time_t timestamp = mktime(&time_info);
-
-  if (timestamp == (time_t)-1)
-  {
-    ESP_LOGE(TAG, "mktime 转换失败");
-    return ESP_FAIL;
-  }
-
-  struct timeval tv = {.tv_sec = timestamp, .tv_usec = 0};
-
-  if (settimeofday(&tv, NULL) != 0)
-  {
-    ESP_LOGE(TAG, "settimeofday 设置失败");
-    return ESP_FAIL;
-  }
-
-  ESP_LOGI(TAG, "RTC 设置成功：%04u-%02u-%02u %02u:%02u:%02u", rtc_time->year,
-           rtc_time->month, rtc_time->day, rtc_time->hour, rtc_time->minute,
-           rtc_time->second);
-  
-  return ESP_OK;
-}
-
-esp_err_t Inf_RTC_GetTime(inf_rtc_time_t *rtc_time)
-{
-  if (rtc_time == NULL)
+  if ((utc_time_ms < INF_RTC_MIN_UTC_TIME_MS) ||
+      (utc_time_ms >= INF_RTC_MAX_UTC_TIME_MS) ||
+      !Inf_RTC_IsTimezoneSafe(timezone))
   {
     return ESP_ERR_INVALID_ARG;
   }
-
-  time_t now = time(NULL);
-
-  if (now == (time_t)-1)
+  if (s_mutex == NULL)
   {
-    ESP_LOGE(TAG, "获取系统时间失败");
-    return ESP_FAIL;
+    return ESP_ERR_INVALID_STATE;
   }
 
-  struct tm time_info = {0};
-
-  if (localtime_r(&now, &time_info) == NULL)
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  if (!s_initialized)
   {
-    ESP_LOGE(TAG, "localtime_r 转换失败");
-    return ESP_FAIL;
+    xSemaphoreGive(s_mutex);
+    return ESP_ERR_INVALID_STATE;
   }
 
-  rtc_time->year = (uint16_t)(time_info.tm_year + 1900);
-  rtc_time->month = (uint8_t)(time_info.tm_mon + 1);
-  rtc_time->day = (uint8_t)time_info.tm_mday;
+  s_time_valid = false;
+  esp_err_t err = Dri_RTC_SetUtcTimeMs(utc_time_ms);
+  if (err == ESP_OK)
+  {
+    if (setenv("TZ", timezone, 1) != 0)
+    {
+      ESP_LOGE(TAG, "设置时区失败：errno=%d", errno);
+      err = ESP_FAIL;
+    }
+    else
+    {
+      tzset();
+      s_time_valid = true;
+    }
+  }
+  xSemaphoreGive(s_mutex);
 
-  rtc_time->hour = (uint8_t)time_info.tm_hour;
-  rtc_time->minute = (uint8_t)time_info.tm_min;
-  rtc_time->second = (uint8_t)time_info.tm_sec;
-
-  rtc_time->weekday = (uint8_t)time_info.tm_wday;
-
-  return ESP_OK;
-}
-
-int64_t Inf_RTC_GetTimestamp(void)
-{
-  return (int64_t)time(NULL);
+  if (err == ESP_OK)
+  {
+    ESP_LOGI(TAG, "云端校时成功：utc_ms=%" PRId64 "，timezone=%s",
+             utc_time_ms, timezone);
+  }
+  return err;
 }
 
 bool Inf_RTC_IsTimeValid(void)
 {
-  inf_rtc_time_t rtc_time = {0};
-
-  if (Inf_RTC_GetTime(&rtc_time) != ESP_OK)
+  if (s_mutex == NULL)
   {
     return false;
   }
 
-  return (rtc_time.year >= INF_RTC_VALID_YEAR_MIN);
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  bool valid = s_initialized && s_time_valid;
+  xSemaphoreGive(s_mutex);
+  return valid;
 }
 
-void Inf_RTC_PrintTime(void)
+esp_err_t Inf_RTC_GetUtcTimestamp(int64_t *utc_time_s)
 {
-  inf_rtc_time_t rtc_time = {0};
-
-  if (Inf_RTC_GetTime(&rtc_time) != ESP_OK)
+  if (utc_time_s == NULL)
   {
-    ESP_LOGE(TAG, "读取 RTC 时间失败");
-    return;
+    return ESP_ERR_INVALID_ARG;
+  }
+  *utc_time_s = 0;
+
+  if (s_mutex == NULL)
+  {
+    return ESP_ERR_INVALID_STATE;
   }
 
-  static const char *weekday_string[7] = {
-      "星期日", "星期一", "星期二", "星期三", "星期四", "星期五", "星期六"};
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  if (!s_initialized || !s_time_valid)
+  {
+    xSemaphoreGive(s_mutex);
+    return ESP_ERR_INVALID_STATE;
+  }
 
-  ESP_LOGI(TAG, "%04u-%02u-%02u %02u:%02u:%02u %s", rtc_time.year,
-           rtc_time.month, rtc_time.day, rtc_time.hour, rtc_time.minute,
-           rtc_time.second, weekday_string[rtc_time.weekday]);
+  int64_t utc_time_ms = 0;
+  esp_err_t err = Dri_RTC_GetUtcTimeMs(&utc_time_ms);
+  xSemaphoreGive(s_mutex);
+
+  if (err == ESP_OK)
+  {
+    *utc_time_s = utc_time_ms / INT64_C(1000);
+  }
+  return err;
+}
+
+esp_err_t Inf_RTC_ConvertUtcToLocal(int64_t utc_time_s,
+                                    struct tm *local_time)
+{
+  if (local_time == NULL)
+  {
+    return ESP_ERR_INVALID_ARG;
+  }
+  memset(local_time, 0, sizeof(*local_time));
+
+  time_t raw_time = (time_t)utc_time_s;
+  if ((int64_t)raw_time != utc_time_s)
+  {
+    return ESP_ERR_INVALID_SIZE;
+  }
+  if (s_mutex == NULL)
+  {
+    return ESP_ERR_INVALID_STATE;
+  }
+
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  if (!s_initialized || !s_time_valid)
+  {
+    xSemaphoreGive(s_mutex);
+    return ESP_ERR_INVALID_STATE;
+  }
+  struct tm *result = localtime_r(&raw_time, local_time);
+  xSemaphoreGive(s_mutex);
+
+  return (result != NULL) ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t Inf_RTC_GetLocalTime(struct tm *local_time)
+{
+  if (local_time == NULL)
+  {
+    return ESP_ERR_INVALID_ARG;
+  }
+  memset(local_time, 0, sizeof(*local_time));
+
+  if (s_mutex == NULL)
+  {
+    return ESP_ERR_INVALID_STATE;
+  }
+
+  xSemaphoreTake(s_mutex, portMAX_DELAY);
+  if (!s_initialized || !s_time_valid)
+  {
+    xSemaphoreGive(s_mutex);
+    return ESP_ERR_INVALID_STATE;
+  }
+
+  int64_t utc_time_ms = 0;
+  esp_err_t err = Dri_RTC_GetUtcTimeMs(&utc_time_ms);
+  if (err == ESP_OK)
+  {
+    time_t raw_time = (time_t)(utc_time_ms / INT64_C(1000));
+    err = (localtime_r(&raw_time, local_time) != NULL) ? ESP_OK : ESP_FAIL;
+  }
+  xSemaphoreGive(s_mutex);
+  return err;
 }

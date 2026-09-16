@@ -65,27 +65,6 @@ extern "C"
   esp_err_t App_ClockDisplay_Deinit(void);
 
   /**
-   * @brief 设置 RTC 时间并立即提交一次显示刷新。
-   *
-   * 先将完整日期和时间写入 RTC；设置成功后，将其中的小时和分钟提交给
-   * AiP1620 显示服务。可由蓝牙、网络、按键或其他校时模块调用。后续显示
-   * 仍由时钟任务每秒刷新。
-   *
-   * @param[in] time 要设置的完整 RTC 日期和时间，不能为 `NULL`，各字段必须
-   *                 满足 @ref inf_rtc_time_t 的有效范围。
-   *
-   * @note 返回 `ESP_OK` 表示 RTC 设置成功且显示命令已进入消息队列，不表示
-   *       硬件显示已经完成刷新。
-   *
-   * @retval ESP_OK RTC 设置成功，且显示刷新命令已成功进入消息队列。
-   * @retval ESP_ERR_INVALID_ARG `time` 为空或包含无效日期、时间字段。
-   * @retval ESP_ERR_INVALID_STATE AiP1620 显示服务尚未初始化。
-   * @retval ESP_ERR_TIMEOUT 显示命令未能在规定时间内进入消息队列。
-   * @return 其他值表示 RTC 设置失败。
-   */
-  esp_err_t App_ClockDisplay_SetTime(const inf_rtc_time_t *time);
-
-  /**
    * @brief 开启或关闭时钟显示输出。
    *
    * 关闭显示时保留显示 RAM 和亮度。时钟任务仍会每秒更新 RAM，因此重新

@@ -12,7 +12,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "Inf_RTC.h"
 #include "Inf_SleepStorage.h"
 #include "esp_err.h"
 #include "sdkconfig.h"
@@ -75,9 +74,6 @@ extern "C"
   /** @brief 更新设备绑定状态。解除绑定不会中断已经开始的记录。 */
   esp_err_t App_SleepRecord_SetBound(bool bound);
 
-  /** @brief 设置/校准 RTC 时间。 */
-  esp_err_t App_SleepRecord_SetTime(const inf_rtc_time_t *time);
-
   /**
    * @brief 开始睡眠记录。
    *
@@ -93,7 +89,7 @@ extern "C"
    */
   esp_err_t App_SleepRecord_Stop(uint32_t *new_record_id);
 
-  /** @brief 取消进行中的记录；取消的数据不保存，也不占用 50 条配额。 */
+  /** @brief 取消进行中的记录；取消的数据不保存，也不占用记录配额。 */
   esp_err_t App_SleepRecord_Cancel(void);
 
   /** @brief 获取当前业务状态和已保存记录数量。 */

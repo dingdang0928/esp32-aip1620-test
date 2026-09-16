@@ -7,7 +7,7 @@
  * 及版本迁移由 APP 层负责，因此本模块不理解开始时间、结束时间、同步
  * 状态等业务字段。
  *
- * 存储容量固定为 50 条。容量已满时，追加新记录会覆盖最早生成的记录，
+ * 存储容量由 INF_SLEEP_STORAGE_CAPACITY 定义。容量已满时，追加新记录会覆盖最早生成的记录，
  * 不会以“容量已满”为由拒绝新记录。记录顺序由 INF 层分配的单调递增
  * record_id 确定，不依赖可能被重新校准的 RTC 墙钟时间。
  *
@@ -15,7 +15,7 @@
  * @note 本模块不是多调用者并发接口，统一由 App_SleepRecord 任务调用。
  * @note 所有接口均不得在中断上下文中调用。
  * @note 当前接口只管理已经完成的睡眠记录。进行中记录是否保存检查点，
- *       待 GAP-29 确认后再独立设计，检查点不得占用 50 条完成记录配额。
+ *       待 GAP-29 确认后再独立设计，检查点不得占用完成记录配额。
  */
 
 #ifndef PROJECT_NAME_INF_SLEEP_STORAGE_H
@@ -32,7 +32,8 @@ extern "C"
 #endif
 
 /** @brief 睡眠记录最大保存数量。 */
-#define INF_SLEEP_STORAGE_CAPACITY 50U
+/** 测试阶段使用 5 条；正式发布前改回 50U。 */
+#define INF_SLEEP_STORAGE_CAPACITY 5U
 
 /**
  * @brief 单条记录允许保存的最大业务负载长度，单位为字节。
@@ -71,7 +72,6 @@ extern "C"
    */
   esp_err_t Inf_SleepStorage_Init(void);
 
-
   /**
    * @brief 追加一条已经完成的睡眠记录。
    *
@@ -93,8 +93,8 @@ extern "C"
    * @retval ESP_ERR_INVALID_STATE 模块尚未初始化。
    * @return 其他值表示记录写入或提交失败。
    */
-  esp_err_t Inf_SleepStorage_Append(uint8_t schema_version,
-                                    const void *payload, size_t payload_length,
+  esp_err_t Inf_SleepStorage_Append(uint8_t schema_version, const void *payload,
+                                    size_t payload_length,
                                     uint32_t *new_record_id,
                                     uint32_t *overwritten_record_id);
 
@@ -174,7 +174,8 @@ extern "C"
    * 存储容量固定为 INF_SLEEP_STORAGE_CAPACITY，无需通过运行期结构体重复
    * 返回。最早和最新记录可分别通过逻辑索引 0 和 count-1 读取。
    *
-   * @param[out] count 保存当前有效记录数量，范围为 0~50，不能为 NULL。
+   * @param[out] count 保存当前有效记录数量，范围为
+   *                   0~INF_SLEEP_STORAGE_CAPACITY，不能为 NULL。
    *
    * @retval ESP_OK 获取数量成功。
    * @retval ESP_ERR_INVALID_ARG count 为 NULL。

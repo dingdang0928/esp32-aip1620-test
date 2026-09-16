@@ -13,6 +13,7 @@ idf_component_register(
         "./Inf/Inf_SleepStorage.c"
         "./Dri/Dri_BLE.c"
         "./Dri/Dri_NVS.c"
+        "./Dri/Dri_RTC.c"
     INCLUDE_DIRS
         "."
         "./App"

@@ -9,9 +9,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #include "App_SleepRecord.h"
+#include "Inf_RTC.h"
 #include "driver/uart.h"
 #include "driver/uart_vfs.h"
 #include "esp_log.h"
@@ -22,7 +22,7 @@
 #define SLEEP_UART_TASK_PRIORITY 5U
 #define SLEEP_UART_RX_BUFFER_SIZE 512U
 #define SLEEP_UART_RETRY_MS 20U
-#define SLEEP_UART_LINE_SIZE 96U
+#define SLEEP_UART_LINE_SIZE 160U
 
 static const char *TAG = "SleepUartTest";
 static TaskHandle_t s_uart_task;
@@ -51,13 +51,13 @@ static void App_SleepRecordUartTest_PrintHelp(void)
       TAG,
       "bind 0|1  设置设备绑定状态：0=未绑定，1=已绑定；未绑定时不能开始记录");
   ESP_LOGI(TAG,
-           "time YYYY-MM-DD HH:MM:SS   校准设备 RTC，例如：time 2026-09-15 "
-           "10:00:00。");
+           "time UTC_MS POSIX_TZ  模拟云端校时，例如：time "
+           "1789437600000 CST-8。");
   ESP_LOGI(TAG, "start  开始睡眠记录；执行前必须已经 bind 1 且 RTC 时间有效。");
   ESP_LOGI(TAG,
            "stop  正常结束记录；满 10 分钟才写入 NVS，不足 10 分钟直接丢弃。");
   ESP_LOGI(TAG,
-           "cancel  取消当前记录；不会写入 NVS，也不会占用 50 条记录配额。");
+           "cancel  取消当前记录；不会写入 NVS，也不会占用记录配额。");
   ESP_LOGI(TAG, "status  打印绑定、校时、记录中、已记录时长和 NVS 记录数量。");
   ESP_LOGI(TAG, "list  从最早到最新读取并打印 NVS 中的全部睡眠记录。");
   ESP_LOGI(TAG,
@@ -124,14 +124,16 @@ static bool App_SleepRecordUartTest_ReadLine(char *line, size_t capacity)
 static void App_SleepRecordUartTest_FormatTime(uint32_t timestamp, char *buffer,
                                                size_t buffer_size)
 {
-  time_t raw_time = (time_t)timestamp;
   struct tm local_time = {0};
-  if (localtime_r(&raw_time, &local_time) == NULL)
+  if (Inf_RTC_ConvertUtcToLocal((int64_t)timestamp, &local_time) != ESP_OK)
   {
     snprintf(buffer, buffer_size, "invalid");
     return;
   }
-  (void)strftime(buffer, buffer_size, "%Y-%m-%d %H:%M:%S", &local_time);
+  snprintf(buffer, buffer_size, "%04d-%02d-%02d %02d:%02d:%02d",
+           local_time.tm_year + 1900, local_time.tm_mon + 1,
+           local_time.tm_mday, local_time.tm_hour, local_time.tm_min,
+           local_time.tm_sec);
 }
 
 static esp_err_t App_SleepRecordUartTest_PrintRecord(uint8_t index)
@@ -205,36 +207,18 @@ static esp_err_t App_SleepRecordUartTest_List(void)
 
 static esp_err_t App_SleepRecordUartTest_SetTime(const char *arguments)
 {
-  unsigned int year;
-  unsigned int month;
-  unsigned int day;
-  unsigned int hour;
-  unsigned int minute;
-  unsigned int second;
+  int64_t utc_time_ms = 0;
+  char timezone[INF_RTC_TIMEZONE_MAX_LENGTH + 1U] = {0};
   char tail;
 
-  int fields = sscanf(arguments, "%u-%u-%u %u:%u:%u %c", &year, &month, &day,
-                      &hour, &minute, &second, &tail);
-  if (fields != 6)
+  int fields = sscanf(arguments, "%" SCNd64 " %96s %c", &utc_time_ms,
+                      timezone, &tail);
+  if ((fields != 2) || (utc_time_ms < 0))
   {
     return ESP_ERR_INVALID_ARG;
   }
 
-  inf_rtc_time_t rtc_time = {
-      .year = (uint16_t)year,
-      .month = (uint8_t)month,
-      .day = (uint8_t)day,
-      .hour = (uint8_t)hour,
-      .minute = (uint8_t)minute,
-      .second = (uint8_t)second,
-      .weekday = 0U,
-  };
-  if ((year > UINT16_MAX) || (month > UINT8_MAX) || (day > UINT8_MAX) ||
-      (hour > UINT8_MAX) || (minute > UINT8_MAX) || (second > UINT8_MAX))
-  {
-    return ESP_ERR_INVALID_ARG;
-  }
-  return App_SleepRecord_SetTime(&rtc_time);
+  return Inf_RTC_SyncFromCloud(utc_time_ms, timezone);
 }
 
 static esp_err_t App_SleepRecordUartTest_ParseU32(const char *arguments,

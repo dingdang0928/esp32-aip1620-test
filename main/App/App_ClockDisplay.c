@@ -20,14 +20,15 @@ static TaskHandle_t s_clock_task;
 
 static void App_ClockDisplay_Refresh(void)
 {
-  inf_rtc_time_t time = {0};
-  if (!Inf_RTC_IsTimeValid() || (Inf_RTC_GetTime(&time) != ESP_OK))
+  struct tm local_time = {0};
+  if (Inf_RTC_GetLocalTime(&local_time) != ESP_OK)
   {
     (void)App_DisplayAIP1620_ShowTime(0U, 0U, true);
     return;
   }
 
-  esp_err_t ret = App_DisplayAIP1620_ShowTime(time.hour, time.minute, true);
+  esp_err_t ret = App_DisplayAIP1620_ShowTime(
+      (uint8_t)local_time.tm_hour, (uint8_t)local_time.tm_min, true);
   if (ret != ESP_OK)
   {
     MY_LOGE("时钟显示消息发送失败：%s", esp_err_to_name(ret));
@@ -68,6 +69,8 @@ esp_err_t App_ClockDisplay_Init(void)
   {
     return ret;
   }
+
+
   ret = App_DisplayAIP1620_Init();
   if (ret != ESP_OK)
   {
@@ -129,16 +132,6 @@ esp_err_t App_ClockDisplay_Deinit(void)
     return result;
   }
   return App_DisplayAIP1620_Deinit();
-}
-
-esp_err_t App_ClockDisplay_SetTime(const inf_rtc_time_t *time)
-{
-  esp_err_t ret = Inf_RTC_SetTime(time);
-  if (ret == ESP_OK)
-  {
-    ret = App_DisplayAIP1620_ShowTime(time->hour, time->minute, true);
-  }
-  return ret;
 }
 
 esp_err_t App_ClockDisplay_SetEnabled(bool enabled)
