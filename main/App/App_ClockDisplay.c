@@ -18,7 +18,7 @@ typedef struct
 static QueueHandle_t s_clock_queue;
 static TaskHandle_t s_clock_task;
 
-static void App_ClockDisplay_Refresh(void)
+void App_ClockDisplay_Refresh(void)
 {
   struct tm local_time = {0};
   if (Inf_RTC_GetLocalTime(&local_time) != ESP_OK)
@@ -26,9 +26,12 @@ static void App_ClockDisplay_Refresh(void)
     (void)App_DisplayAIP1620_ShowTime(0U, 0U, true);
     return;
   }
-
-  esp_err_t ret = App_DisplayAIP1620_ShowTime(
-      (uint8_t)local_time.tm_hour, (uint8_t)local_time.tm_min, true);
+  esp_err_t ret = App_DisplayAIP1620_ShowTime((uint8_t)local_time.tm_hour,
+                                              (uint8_t)local_time.tm_min, true);
+  // 通过串口打印进行显示当前时间用于测试,后期可以注释掉这行代码
+  MY_LOGI("当前时间 %04d-%02d-%02d %02d:%02d:%02d", local_time.tm_year + 1900,
+          local_time.tm_mon + 1, local_time.tm_mday, local_time.tm_hour,
+          local_time.tm_min, local_time.tm_sec);
   if (ret != ESP_OK)
   {
     MY_LOGE("时钟显示消息发送失败：%s", esp_err_to_name(ret));
@@ -39,12 +42,24 @@ static void App_ClockDisplay_Task(void *argument)
 {
   (void)argument;
 
+  const TickType_t refresh_ticks = pdMS_TO_TICKS(CLOCK_REFRESH_MS);
+  TickType_t next_refresh_tick = xTaskGetTickCount();
   clock_command_t command;
   while (true)
   {
     App_ClockDisplay_Refresh();
-    if (xQueueReceive(s_clock_queue, &command,
-                      pdMS_TO_TICKS(CLOCK_REFRESH_MS)) == pdPASS)
+
+    /*
+     * 使用固定刷新时间点计算队列等待时间，避免把本轮执行耗时累加到
+     * 1 秒周期中。队列仍可在等待期间立即接收退出命令。
+     */
+    next_refresh_tick += refresh_ticks;
+    TickType_t now = xTaskGetTickCount();
+    int32_t remaining_ticks = (int32_t)(next_refresh_tick - now);
+    TickType_t wait_ticks =
+        (remaining_ticks > 0) ? (TickType_t)remaining_ticks : 0U;
+
+    if (xQueueReceive(s_clock_queue, &command, wait_ticks) == pdPASS)
     {
       const esp_err_t result = ESP_OK;
       s_clock_task = NULL;
@@ -69,7 +84,6 @@ esp_err_t App_ClockDisplay_Init(void)
   {
     return ret;
   }
-
 
   ret = App_DisplayAIP1620_Init();
   if (ret != ESP_OK)

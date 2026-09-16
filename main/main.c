@@ -5,9 +5,11 @@
 #include "Dri_BLE.h"
 #include "esp_err.h"
 #include "sdkconfig.h"
+#include "Inf_RGB.h"
 
 void app_main(void)
 {
+  inf_rgb_init();  // 放着自己看的,装饰用
   ESP_ERROR_CHECK(App_SleepRecord_Init());
   ESP_ERROR_CHECK(App_ClockDisplay_Init());
   Dri_BLE_Init();

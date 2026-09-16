@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "App_ClockDisplay.h"
 #include "App_SleepRecord.h"
 #include "Inf_RTC.h"
 #include "driver/uart.h"
@@ -218,7 +219,14 @@ static esp_err_t App_SleepRecordUartTest_SetTime(const char *arguments)
     return ESP_ERR_INVALID_ARG;
   }
 
-  return Inf_RTC_SyncFromCloud(utc_time_ms, timezone);
+  esp_err_t err = Inf_RTC_SyncFromCloud(utc_time_ms, timezone);
+  if (err != ESP_OK)
+  {
+    return err;
+  }
+
+  App_ClockDisplay_Refresh();
+  return ESP_OK;
 }
 
 static esp_err_t App_SleepRecordUartTest_ParseU32(const char *arguments,

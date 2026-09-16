@@ -10,6 +10,10 @@ the 2026-09-09 V0.3 technical specification and IR-SR requirement breakdown.
 Items marked as GAP or pending in those sources must not be treated as finalized
 requirements.
 
+The cloud time-synchronization payload, POSIX timezone rules, acknowledgements,
+and integration test cases are documented in
+[`docs/T6350_云端校时接口协议_V1.0.md`](docs/T6350_云端校时接口协议_V1.0.md).
+
 ## AiP1620 architecture
 
 AiP1620 follows a strict two-layer design:

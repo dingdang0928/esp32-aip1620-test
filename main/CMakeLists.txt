@@ -14,6 +14,7 @@ idf_component_register(
         "./Dri/Dri_BLE.c"
         "./Dri/Dri_NVS.c"
         "./Dri/Dri_RTC.c"
+        "./Dri/Dri_WiFi.c"
     INCLUDE_DIRS
         "."
         "./App"

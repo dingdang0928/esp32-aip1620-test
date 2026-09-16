@@ -65,6 +65,15 @@ extern "C"
   esp_err_t App_ClockDisplay_Deinit(void);
 
   /**
+   * @brief 立即读取 RTC 并提交一次时间显示刷新。
+   *
+   * 云端或测试串口完成校时后可调用本函数，使新时间无需等待下一次 1 秒周期
+   * 刷新即可显示。RTC 尚未校时时提交 `00:00`。
+   *
+   */
+  void App_ClockDisplay_Refresh(void);
+
+  /**
    * @brief 开启或关闭时钟显示输出。
    *
    * 关闭显示时保留显示 RAM 和亮度。时钟任务仍会每秒更新 RAM，因此重新

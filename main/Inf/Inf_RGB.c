@@ -4,13 +4,12 @@
 #include "freertos/task.h"
 
 #define RGB_GPIO 38
-#define RGB_BREATH_PERIOD_MS 2000
+#define RGB_COLOR_CYCLE_MS 7000
 #define RGB_UPDATE_PERIOD_MS 20
-#define RGB_MAX_BRIGHTNESS 100
+#define RGB_MAX_BRIGHTNESS 48U
 #define RGB_TASK_STACK_SIZE 2048
 #define RGB_TASK_PRIORITY 5
 #define RGB_TASK_STOP_NOTIFICATION (1UL << 0)
-#define PI_F 3.14159265358979323846f
 
 typedef struct
 {
@@ -20,51 +19,72 @@ typedef struct
 } rgb_color_t;
 
 static const rgb_color_t s_colors[] = {
-    {.red = 1, .green = 1, .blue = 0},
-    {.red = 0, .green = 1, .blue = 1},
-    {.red = 1, .green = 0, .blue = 1},
+    {.red = 255U, .green = 0U, .blue = 0U},     /* 红 */
+    {.red = 255U, .green = 127U, .blue = 0U},   /* 橙 */
+    {.red = 255U, .green = 255U, .blue = 0U},   /* 黄 */
+    {.red = 0U, .green = 255U, .blue = 0U},     /* 绿 */
+    {.red = 0U, .green = 255U, .blue = 255U},   /* 青 */
+    {.red = 0U, .green = 0U, .blue = 255U},     /* 蓝 */
+    {.red = 255U, .green = 0U, .blue = 255U},   /* 紫 */
 };
 
 static led_strip_handle_t s_led_strip = NULL;
 static TaskHandle_t s_rgb_task_handle = NULL;
 static TaskHandle_t s_rgb_deinit_waiter = NULL;
 
-static void rgb_set_frame(led_strip_handle_t led_strip,
-                          uint32_t color_index,
-                          uint32_t step)
+static uint8_t rgb_interpolate(uint8_t start,
+                               uint8_t end,
+                               uint32_t step,
+                               uint32_t total_steps)
 {
-  const uint32_t steps = RGB_BREATH_PERIOD_MS / RGB_UPDATE_PERIOD_MS;
-  const float progress = (float)step / (float)steps;
-  const uint8_t brightness = (uint8_t)(
-      (1.0f - cosf(2.0f * PI_F * progress)) *
-          (RGB_MAX_BRIGHTNESS / 2.0f) +
-      0.5f);
-  const rgb_color_t *color = &s_colors[color_index];
+  uint32_t value = ((uint32_t)start * (total_steps - step)) +
+                   ((uint32_t)end * step);
+  return (uint8_t)(value / total_steps);
+}
+
+static void rgb_set_frame(led_strip_handle_t led_strip, uint32_t color_step)
+{
+  const uint32_t color_count = sizeof(s_colors) / sizeof(s_colors[0]);
+  const uint32_t steps_per_color =
+      (RGB_COLOR_CYCLE_MS / color_count) / RGB_UPDATE_PERIOD_MS;
+  const uint32_t color_index = color_step / steps_per_color;
+  const uint32_t next_color_index = (color_index + 1U) % color_count;
+  const uint32_t transition_step = color_step % steps_per_color;
+  const rgb_color_t *current = &s_colors[color_index];
+  const rgb_color_t *next = &s_colors[next_color_index];
+
+  uint8_t red = rgb_interpolate(current->red, next->red,
+                                transition_step, steps_per_color);
+  uint8_t green = rgb_interpolate(current->green, next->green,
+                                  transition_step, steps_per_color);
+  uint8_t blue = rgb_interpolate(current->blue, next->blue,
+                                 transition_step, steps_per_color);
+
+  red = (uint8_t)(((uint16_t)red * RGB_MAX_BRIGHTNESS) / 255U);
+  green = (uint8_t)(((uint16_t)green * RGB_MAX_BRIGHTNESS) / 255U);
+  blue = (uint8_t)(((uint16_t)blue * RGB_MAX_BRIGHTNESS) / 255U);
 
   ESP_ERROR_CHECK(led_strip_set_pixel(led_strip, 0,
-                                      color->red * brightness,
-                                      color->green * brightness,
-                                      color->blue * brightness));
+                                      red,
+                                      green,
+                                      blue));
   ESP_ERROR_CHECK(led_strip_refresh(led_strip));
 }
 
-static void rgb_breathing_task(void *arg)
+static void rgb_color_cycle_task(void *arg)
 {
   led_strip_handle_t led_strip = (led_strip_handle_t)arg;
-  const uint32_t steps = RGB_BREATH_PERIOD_MS / RGB_UPDATE_PERIOD_MS;
-  uint32_t color_index = 0;
-  uint32_t step = 0;
+  const uint32_t color_steps = RGB_COLOR_CYCLE_MS / RGB_UPDATE_PERIOD_MS;
+  uint32_t color_step = 0;
 
   while (1)
   {
-    rgb_set_frame(led_strip, color_index, step);
+    rgb_set_frame(led_strip, color_step);
 
-    step++;
-    if (step >= steps)
+    color_step++;
+    if (color_step >= color_steps)
     {
-      step = 0;
-      color_index = (color_index + 1) %
-                    (sizeof(s_colors) / sizeof(s_colors[0]));
+      color_step = 0;
     }
 
     if (xTaskNotifyWait(0,
@@ -115,8 +135,8 @@ esp_err_t inf_rgb_init(void)
     return err;
   }
 
-  if (xTaskCreate(rgb_breathing_task,
-                  "rgb_breath",
+  if (xTaskCreate(rgb_color_cycle_task,
+                  "rgb_cycle",
                   RGB_TASK_STACK_SIZE,
                   (void *)s_led_strip,
                   RGB_TASK_PRIORITY,

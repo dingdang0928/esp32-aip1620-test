@@ -5,7 +5,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "led_strip.h"
-#include <math.h>
 #include <stdint.h>
 
 esp_err_t inf_rgb_init(void);
